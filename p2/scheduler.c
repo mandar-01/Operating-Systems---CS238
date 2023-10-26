@@ -38,6 +38,8 @@ typedef struct thread {
         void *memory;
     } stack;
     struct thread *link;
+    char *name;
+    scheduler_fnc_t fnc;
 } Thread;
 
 static struct {
@@ -47,14 +49,19 @@ static struct {
 } state;
 
 Thread *thread_candidate(void) {
-    Thread *running = state.cur_thread;
+    Thread *running;
+    if(state.cur_thread != NULL)
+        running = state.cur_thread;
+    else
+        running = state.head;
+    
     Thread *start = running->link;
     do {
         if(start == NULL)
             start = state.head;
-        if(start->status == STATUS_ || start->status == STATUS_SLEEPING)
+        if(start->status == STATUS_ || start->status == STATUS_SLEEPING) {
             return start;
-        else
+        } else
             start = start->link;
     } while(start != running->link);
     return NULL;
@@ -85,9 +92,11 @@ int scheduler_create(scheduler_fnc_t fnc, void *arg) {
         return -1;
     }
 
+    thread->fnc = fnc;
+    thread->name = arg;
     thread->link = state.head;
-    state.head = thread;
     thread->status = STATUS_;
+    state.head = thread;
 
     thread->stack.memory_ = malloc(SZ_STACK);
 
@@ -99,39 +108,40 @@ int scheduler_create(scheduler_fnc_t fnc, void *arg) {
     }
 
     thread->stack.memory = memory_align(thread->stack.memory_, page_size());
-    
-    if (setjmp(thread->ctx) != 0) {
-        (*fnc)(arg);
-        thread->status = STATUS_TERMINATED;
-    }
-
     return 0;
 }
 
 void schedule(void) {
     Thread *next = thread_candidate();
+    printf("%s\n", next->name);
 
     if(next == NULL) {
         fprintf(stderr, "No candidate thread found.\n");
         return;
+    } else if(next->status == STATUS_) {
+        void *rsp = next->stack.memory;
+        __asm__ volatile ("mov %[rs], %%rsp \n" : [rs] "+r" (rsp) ::);
+        state.cur_thread = next;
+        state.cur_thread->status = STATUS_RUNNING;
+        (*next->fnc)(next->name);
+        next->status = STATUS_TERMINATED;
+    } else {
+        state.cur_thread = next;
+        state.cur_thread->status = STATUS_RUNNING;
+        longjmp(next->ctx, 1);
     }
-
-    state.cur_thread = next;
-    state.cur_thread->status = STATUS_RUNNING;
-    longjmp(next->ctx, 1);
 }
 
 void scheduler_execute(void) {
-    if(setjmp(state.ctx) == 0) {
-        schedule();
-        destroy();
-    }
+    setjmp(state.ctx);
     schedule();
+    destroy();
 }
 
 void scheduler_yield(void) {
-    if(setjmp(state.cur_thread->ctx) == 0) {
+    if(setjmp(state.cur_thread->ctx) != 0) {
         state.cur_thread->status = STATUS_SLEEPING;
         longjmp(state.ctx, 1);
-    }
+    } else
+        return;
 }
