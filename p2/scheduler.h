@@ -73,23 +73,10 @@ void scheduler_execute(void);
 
 void scheduler_yield(void);
 
+void schedule(void);
+
+struct thread *thread_candidate(void);
+
+void destroy(void);
+
 #endif /* _SCHEDULER_H_ */
-
-void schedule(void){
-    /*
-        thread object = thread_candidate()
-        if thread object null, nothing to schedule and we are done.
-
-        else if status of thread_candidate is other than intiial status:
-
-        state.thread = thread_object (we have new running thread)
-        thread_object.status = RUNNING
-
-        longjmp(thread_object->ctx) (this goes back to scheduler yield checkpoint)
-
-        else if status is brand new:
-
-        initialise a stack
-        call the function actually rather than long jump
-    */
-}

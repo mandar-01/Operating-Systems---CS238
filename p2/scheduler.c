@@ -23,7 +23,7 @@
 
 /* research the above Needed API and design accordingly */
 
-#define SZ_STACK 4096
+#define SZ_STACK (2*page_size())
 
 typedef struct thread {
     jmp_buf ctx;
@@ -38,8 +38,6 @@ typedef struct thread {
         void *memory;
     } stack;
     struct thread *link;
-    scheduler_fnc_t fnc;
-    const char *name;
 } Thread;
 
 static struct {
@@ -62,54 +60,51 @@ Thread *thread_candidate(void) {
     return NULL;
 }
 
-static void destroy(void) {
+void destroy(void) {
     Thread *start = state.head;
     Thread *temp;
     
     while(start != NULL) {
         temp = start->link;
-        
-        memset(start->stack.memory_, 0, sizeof(start->stack.memory_));
-        memset(start->stack.memory, 0, sizeof(start->stack.memory));
         free(start->stack.memory_);
-        
-        memset(start, 0, sizeof(start));
         free(start);
         start = temp;
     }
-
+    
+    free(temp);
     state.head = NULL;
     state.cur_thread = NULL;
 }
 
 int scheduler_create(scheduler_fnc_t fnc, void *arg) {
-    size_t page_size_ = page_size();
-    int num_pages;
-
     Thread *thread = (Thread *)malloc(sizeof(Thread));
     /* Error handling for memory allocation failure */
     if (!thread) {
         fprintf(stderr, "Memory allocation failed for thread.\n");
+        free(thread);
         return -1;
     }
 
-    thread->name = (const char *)arg;
+    thread->link = state.head;
+    state.head = thread;
     thread->status = STATUS_;
-    
-    thread->fnc = fnc;
+
     thread->stack.memory_ = malloc(SZ_STACK);
+
     /* Error handling for stack allocation failure */
     if (!thread->stack.memory_) {
         fprintf(stderr, "Stack allocation failed for stack.\n");
+        free(thread);
         return -1;
     }
 
-    num_pages = (int)SZ_STACK/(int)page_size_ + ((int)SZ_STACK % (int)page_size_ != 0) + 1;
-
-    thread->stack.memory = memory_align(thread->stack.memory_, (size_t)num_pages);
-    thread->link = state.head;
-    state.head = thread;
+    thread->stack.memory = memory_align(thread->stack.memory_, page_size());
     
+    if (setjmp(thread->ctx) != 0) {
+        (*fnc)(arg);
+        thread->status = STATUS_TERMINATED;
+    }
+
     return 0;
 }
 
@@ -117,12 +112,26 @@ void schedule(void) {
     Thread *next = thread_candidate();
 
     if(next == NULL) {
-        destroy();
+        fprintf(stderr, "No candidate thread found.\n");
+        return;
     }
 
-    else {
-        state.cur_thread = next;
-        state.cur_thread->status = STATUS_RUNNING;
+    state.cur_thread = next;
+    state.cur_thread->status = STATUS_RUNNING;
+    longjmp(next->ctx, 1);
+}
 
+void scheduler_execute(void) {
+    if(setjmp(state.ctx) == 0) {
+        schedule();
+        destroy();
+    }
+    schedule();
+}
+
+void scheduler_yield(void) {
+    if(setjmp(state.cur_thread->ctx) == 0) {
+        state.cur_thread->status = STATUS_SLEEPING;
+        longjmp(state.ctx, 1);
     }
 }
