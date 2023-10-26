@@ -85,6 +85,7 @@ void destroy(void) {
 
 int scheduler_create(scheduler_fnc_t fnc, void *arg) {
     Thread *thread = (Thread *)malloc(sizeof(Thread));
+    
     /* Error handling for memory allocation failure */
     if (!thread) {
         fprintf(stderr, "Memory allocation failed for thread.\n");
@@ -113,7 +114,6 @@ int scheduler_create(scheduler_fnc_t fnc, void *arg) {
 
 void schedule(void) {
     Thread *next = thread_candidate();
-    printf("%s\n", next->name);
 
     if(next == NULL) {
         fprintf(stderr, "No candidate thread found.\n");
@@ -139,7 +139,7 @@ void scheduler_execute(void) {
 }
 
 void scheduler_yield(void) {
-    if(setjmp(state.cur_thread->ctx) != 0) {
+    if(setjmp(state.cur_thread->ctx) == 0) {
         state.cur_thread->status = STATUS_SLEEPING;
         longjmp(state.ctx, 1);
     } else
