@@ -9,6 +9,14 @@
 
 #include "system.h"
 #include "scheduler.h"
+#include <signal.h>
+#include <unistd.h>
+
+void signal_handler(int i) {
+	assert(SIGALRM == i);
+	scheduler_yield();
+	alarm(1);
+}
 
 static void
 _thread_(void *arg)
@@ -20,13 +28,16 @@ _thread_(void *arg)
 	for (i=0; i<100; ++i) {
 		printf("%s %d\n", name, i);
 		us_sleep(20000);
-		scheduler_yield();
 	}
 }
 
 int
 main(int argc, char *argv[])
 {
+	if(SIG_ERR == signal(SIGALRM, *signal_handler)) {
+		fprintf(stderr, "Error in signal handling.\n");
+	}
+
 	UNUSED(argc);
 	UNUSED(argv);
 
@@ -39,5 +50,7 @@ main(int argc, char *argv[])
 		return -1;
 	}
 	scheduler_execute();
+	alarm(1);
+	
 	return 0;
 }

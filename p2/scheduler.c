@@ -50,12 +50,14 @@ static struct {
 
 Thread *thread_candidate(void) {
     Thread *running;
+    Thread *start;
+    
     if(state.cur_thread != NULL)
         running = state.cur_thread;
     else
         running = state.head;
     
-    Thread *start = running->link;
+    start = running->link;
     do {
         if(start == NULL)
             start = state.head;
@@ -64,6 +66,7 @@ Thread *thread_candidate(void) {
         } else
             start = start->link;
     } while(start != running->link);
+    
     return NULL;
 }
 
