@@ -59,9 +59,9 @@ Thread *thread_candidate(void) {
     do {
         if(start == NULL)
             start = state.head;
-        if(start->status == STATUS_ || start->status == STATUS_SLEEPING) {
+        if(start->status == STATUS_ || start->status == STATUS_SLEEPING)
             return start;
-        } else
+        else
             start = start->link;
     } while(start != running->link);
     return NULL;
