@@ -49,7 +49,37 @@ static struct {
 } state;
 
 Thread *thread_candidate(void) {
+    Thread *running = state.cur_thread;
+    Thread *start = running->link;
+    do {
+        if(start == NULL)
+            start = state.head;
+        if(start->status == STATUS_ || start->status == STATUS_SLEEPING)
+            return start;
+        else
+            start = start->link;
+    } while(start != running->link);
+    return NULL;
+}
 
+static void destroy(void) {
+    Thread *start = state.head;
+    Thread *temp;
+    
+    while(start != NULL) {
+        temp = start->link;
+        
+        memset(start->stack.memory_, 0, sizeof(start->stack.memory_));
+        memset(start->stack.memory, 0, sizeof(start->stack.memory));
+        free(start->stack.memory_);
+        
+        memset(start, 0, sizeof(start));
+        free(start);
+        start = temp;
+    }
+
+    state.head = NULL;
+    state.cur_thread = NULL;
 }
 
 int scheduler_create(scheduler_fnc_t fnc, void *arg) {
@@ -81,4 +111,18 @@ int scheduler_create(scheduler_fnc_t fnc, void *arg) {
     state.head = thread;
     
     return 0;
+}
+
+void schedule(void) {
+    Thread *next = thread_candidate();
+
+    if(next == NULL) {
+        destroy();
+    }
+
+    else {
+        state.cur_thread = next;
+        state.cur_thread->status = STATUS_RUNNING;
+
+    }
 }
