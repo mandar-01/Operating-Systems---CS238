@@ -54,8 +54,6 @@ static struct
 
 void handler(int sig)
 {
-    printf("Alarm called\n");
-    fflush(stdout);
     assert(sig == SIGALRM);
     scheduler_yield();
 }
@@ -85,9 +83,7 @@ Thread *thread_candidate(void)
 
 void destroy(void)
 {
-    printf("Destroy is called\n");
-    fflush(stdout);
-    /*
+
     Thread *start = state.head;
     Thread *temp;
 
@@ -99,10 +95,8 @@ void destroy(void)
         free(start);
         start = temp;
     }
-
     state.head = NULL;
     state.cur_thread = NULL;
-    */
 }
 
 int scheduler_create(scheduler_fnc_t fnc, void *arg)
@@ -128,8 +122,6 @@ int scheduler_create(scheduler_fnc_t fnc, void *arg)
     /* Error handling for stack allocation failure */
     if (!thread->stack.memory_)
     {
-        fprintf(stderr, "Stack allocation failed for stack.\n");
-        free(thread);
         return -1;
     }
 
@@ -139,12 +131,12 @@ int scheduler_create(scheduler_fnc_t fnc, void *arg)
 
 void schedule(void)
 {
-    Thread *next = thread_candidate();
+    setjmp(state.ctx);
 
+    Thread *next = thread_candidate();
+    fflush(stdout);
     if (next == NULL)
     {
-        fprintf(stderr, "No candidate thread found.\n");
-        fflush(stdout);
         return;
     }
     else
@@ -165,7 +157,8 @@ void schedule(void)
             state.cur_thread->status = STATUS_RUNNING;
             (*next->fnc)(next->name);
             next->status = STATUS_TERMINATED;
-            scheduler_yield();
+            alarm(0);
+            longjmp(state.ctx, 1);
         }
         else
         {
@@ -174,16 +167,12 @@ void schedule(void)
             longjmp(next->ctx, 1);
         }
     }
-    printf("Reached at the end of schedule\n");
-    fflush(stdout);
     return;
 }
 
 void scheduler_execute(void)
 {
-    setjmp(state.ctx);
     schedule();
-    printf("Schedule ended\n");
     fflush(stdout);
     destroy();
 }
