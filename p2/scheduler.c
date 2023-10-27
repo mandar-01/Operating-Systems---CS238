@@ -48,14 +48,22 @@ static struct {
     jmp_buf ctx;
 } state;
 
+void handler(int sig) {
+    assert(sig == SIGALRM);
+    alarm(1);
+    scheduler_yield();
+}
+
 Thread *thread_candidate(void) {
     Thread *running;
+    Thread *start;
+
     if(state.cur_thread != NULL)
         running = state.cur_thread;
     else
         running = state.head;
     
-    Thread *start = running->link;
+    start = running->link;
     do {
         if(start == NULL)
             start = state.head;
@@ -73,12 +81,12 @@ void destroy(void) {
     
     while(start != NULL) {
         temp = start->link;
-        free(start->stack.memory_);
+        if(start->stack.memory_ != NULL)
+            free(start->stack.memory_);
         free(start);
         start = temp;
     }
     
-    free(temp);
     state.head = NULL;
     state.cur_thread = NULL;
 }
@@ -133,6 +141,11 @@ void schedule(void) {
 }
 
 void scheduler_execute(void) {
+    if(SIG_ERR == signal(SIGALRM, handler)) {
+        fprintf(stderr, "Signal handling failure\n");
+        return;
+    }
+    alarm(1);
     setjmp(state.ctx);
     schedule();
     destroy();
