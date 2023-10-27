@@ -164,11 +164,8 @@ void schedule(void)
             state.cur_thread = next;
             state.cur_thread->status = STATUS_RUNNING;
             (*next->fnc)(next->name);
-            printf("%s came out of function\n", state.cur_thread->name);
-            fflush(stdout);
             next->status = STATUS_TERMINATED;
-            printf("%s changed to terminated\n", next->name);
-            fflush(stdout);
+            scheduler_yield();
         }
         else
         {
@@ -177,6 +174,9 @@ void schedule(void)
             longjmp(next->ctx, 1);
         }
     }
+    printf("Reached at the end of schedule\n");
+    fflush(stdout);
+    return;
 }
 
 void scheduler_execute(void)

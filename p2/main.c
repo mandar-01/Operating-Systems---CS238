@@ -22,8 +22,6 @@ _thread_(void *arg)
 		printf("%s %d\n", name, i);
 		us_sleep(20000);
 	}
-	printf("%s is finished\n", name);
-	fflush(stdout);
 }
 
 int main(int argc, char *argv[])
