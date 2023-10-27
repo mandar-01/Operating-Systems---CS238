@@ -23,17 +23,20 @@
 
 /* research the above Needed API and design accordingly */
 
-#define SZ_STACK (2*page_size())
+#define SZ_STACK (2 * page_size())
 
-typedef struct thread {
+typedef struct thread
+{
     jmp_buf ctx;
-    enum {
+    enum
+    {
         STATUS_,
         STATUS_RUNNING,
         STATUS_SLEEPING,
         STATUS_TERMINATED
     } status;
-    struct {
+    struct
+    {
         void *memory_;
         void *memory;
     } stack;
@@ -42,60 +45,73 @@ typedef struct thread {
     scheduler_fnc_t fnc;
 } Thread;
 
-static struct {
+static struct
+{
     Thread *head;
     Thread *cur_thread;
     jmp_buf ctx;
 } state;
 
-void handler(int sig) {
+void handler(int sig)
+{
+    printf("Alarm called\n");
+    fflush(stdout);
     assert(sig == SIGALRM);
-    alarm(1);
     scheduler_yield();
 }
 
-Thread *thread_candidate(void) {
+Thread *thread_candidate(void)
+{
     Thread *running;
     Thread *start;
 
-    if(state.cur_thread != NULL)
+    if (state.cur_thread != NULL)
         running = state.cur_thread;
     else
         running = state.head;
-    
+
     start = running->link;
-    do {
-        if(start == NULL)
+    do
+    {
+        if (start == NULL)
             start = state.head;
-        if(start->status == STATUS_ || start->status == STATUS_SLEEPING)
+        if (start->status == STATUS_ || start->status == STATUS_SLEEPING)
             return start;
         else
             start = start->link;
-    } while(start != running->link);
+    } while (start != running->link);
     return NULL;
 }
 
-void destroy(void) {
+void destroy(void)
+{
+    printf("Destroy is called\n");
+    fflush(stdout);
+    /*
     Thread *start = state.head;
     Thread *temp;
-    
-    while(start != NULL) {
+
+    while (start != NULL)
+    {
         temp = start->link;
-        if(start->stack.memory_ != NULL)
+        if (start->stack.memory_ != NULL)
             free(start->stack.memory_);
         free(start);
         start = temp;
     }
-    
+
     state.head = NULL;
     state.cur_thread = NULL;
+    */
 }
 
-int scheduler_create(scheduler_fnc_t fnc, void *arg) {
+int scheduler_create(scheduler_fnc_t fnc, void *arg)
+{
     Thread *thread = (Thread *)malloc(sizeof(Thread));
-    
+
     /* Error handling for memory allocation failure */
-    if (!thread) {
+    if (!thread)
+    {
         fprintf(stderr, "Memory allocation failed for thread.\n");
         free(thread);
         return -1;
@@ -110,7 +126,8 @@ int scheduler_create(scheduler_fnc_t fnc, void *arg) {
     thread->stack.memory_ = malloc(SZ_STACK);
 
     /* Error handling for stack allocation failure */
-    if (!thread->stack.memory_) {
+    if (!thread->stack.memory_)
+    {
         fprintf(stderr, "Stack allocation failed for stack.\n");
         free(thread);
         return -1;
@@ -120,41 +137,67 @@ int scheduler_create(scheduler_fnc_t fnc, void *arg) {
     return 0;
 }
 
-void schedule(void) {
+void schedule(void)
+{
     Thread *next = thread_candidate();
 
-    if(next == NULL) {
+    if (next == NULL)
+    {
         fprintf(stderr, "No candidate thread found.\n");
+        fflush(stdout);
         return;
-    } else if(next->status == STATUS_) {
-        void *rsp = next->stack.memory;
-        __asm__ volatile ("mov %[rs], %%rsp \n" : [rs] "+r" (rsp) ::);
-        state.cur_thread = next;
-        state.cur_thread->status = STATUS_RUNNING;
-        (*next->fnc)(next->name);
-        next->status = STATUS_TERMINATED;
-    } else {
-        state.cur_thread = next;
-        state.cur_thread->status = STATUS_RUNNING;
-        longjmp(next->ctx, 1);
+    }
+    else
+    {
+        if (SIG_ERR == signal(SIGALRM, &handler))
+        {
+            fprintf(stderr, "Signal handling failure\n");
+            return;
+        }
+        alarm(1);
+
+        if (next->status == STATUS_)
+        {
+            void *rsp = next->stack.memory;
+            __asm__ volatile("mov %[rs], %%rsp \n"
+                             : [rs] "+r"(rsp)::);
+            state.cur_thread = next;
+            state.cur_thread->status = STATUS_RUNNING;
+            (*next->fnc)(next->name);
+            printf("%s came out of function\n", state.cur_thread->name);
+            fflush(stdout);
+            next->status = STATUS_TERMINATED;
+            printf("%s changed to terminated\n", next->name);
+            fflush(stdout);
+        }
+        else
+        {
+            state.cur_thread = next;
+            state.cur_thread->status = STATUS_RUNNING;
+            longjmp(next->ctx, 1);
+        }
     }
 }
 
-void scheduler_execute(void) {
-    if(SIG_ERR == signal(SIGALRM, handler)) {
-        fprintf(stderr, "Signal handling failure\n");
-        return;
-    }
-    alarm(1);
+void scheduler_execute(void)
+{
     setjmp(state.ctx);
     schedule();
+    printf("Schedule ended\n");
+    fflush(stdout);
     destroy();
 }
 
-void scheduler_yield(void) {
-    if(setjmp(state.cur_thread->ctx) == 0) {
+void scheduler_yield(void)
+{
+
+    if (setjmp(state.cur_thread->ctx) == 0)
+    {
         state.cur_thread->status = STATUS_SLEEPING;
         longjmp(state.ctx, 1);
-    } else
+    }
+    else
+    {
         return;
+    }
 }
