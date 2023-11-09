@@ -5,6 +5,10 @@
  *
  * CS 238P - Operating Systems
  * scm.h
+
+ filesize(pathname) => return size of file
+
+ gcc has abstract object FILE needed to open,read files.
  */
 
 #ifndef _SCM_H_
@@ -43,6 +47,23 @@ void scm_close(struct scm *scm);
  * n  : the size of the requested memory in bytes
  *
  * return: a pointer to the start of the allocated memory or NULL on error
+
+    *scm has a file descriptor, length, size(current allocated size from the available memor region, or can be location of next allocation)
+    on first truncate, size=0, char *mem = virt_addr initially.
+
+    first time called return scm->mem+n
+    size = scm.size
+    scm.size += n
+    return scm->mem+size
+
+    this code is without free functionality
+
+    scm object created using malloc. except size, we persist all params in scm object. at the begining of memory region, store the size.
+    every time malloc is called , update the size stored at the start. after each allocation call msync()
+
+    handle garbage file given, use checksum along with size stored at the start of memor. handle truncate call.
+
+    because of all this info stored at start, the virt-addr is not the base address, it is after this meta data is stored.
  */
 
 void *scm_malloc(struct scm *scm, size_t n);
