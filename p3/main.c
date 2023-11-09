@@ -127,6 +127,8 @@ shell_fnc(void *arg, const char *s)
 		const char *face;
 		int (*fnc)(struct avl *avl, const char *s);
 	} CMDS[] = {
+		/* {num args, command, function to be called} */
+		/* Section customizable to add new commands */
 		{ 0, "quit", quit },
 		{ 0, "help", help },
 		{ 0, "info", info },
@@ -147,6 +149,7 @@ shell_fnc(void *arg, const char *s)
 			    (!CMDS[i].argc && safe_strlen(s))) {
 				break;
 			}
+			/* calling avl from function ptr */
 			return CMDS[i].fnc(avl, s);
 		}
 	}
@@ -194,7 +197,7 @@ main(int argc, char *argv[])
 	int nocolor = 0;
 	struct avl *avl;
 	int i;
-
+	/* Customization using flag inputs */
 	for (i=1; i<argc; ++i) {
 		if (!strcmp(argv[i], "--truncate") && !truncate) {
 			truncate = 1;
@@ -224,6 +227,7 @@ main(int argc, char *argv[])
 	}
 	term_init(nocolor);
 	greetings();
+	/* Called every time user enters shell */
 	shell(shell_fnc, avl);
 	avl_close(avl);
 	return 0;

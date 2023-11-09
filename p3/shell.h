@@ -10,6 +10,9 @@
 #ifndef _SHELL_H_
 #define _SHELL_H_
 
+/* Shell takes input from terminal and passes it to fnc whenever enter is pressed 
+Returns 0 on success */
+
 typedef int (*shell_fnc_t)(void *arg, const char *s);
 
 void shell(shell_fnc_t fnc, void *arg);

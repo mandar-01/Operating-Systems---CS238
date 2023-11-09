@@ -37,10 +37,12 @@ static void
 configure(void)
 {
 	struct termios termios;
-
+	/* Get Configuration */
 	if (tcgetattr(STDIN_FILENO, &state.termios)) {
 		EXIT("tcgetattr()");
 	}
+	
+	/* Modify Configuration */
 	termios = state.termios;
 	termios.c_lflag &= ~(ECHO | ICANON);
 	termios.c_cc[VMIN] = 1;
@@ -52,11 +54,13 @@ configure(void)
 static void
 restore(void)
 {
+	/* Restores configuration for future sessions */
 	if (tcsetattr(STDIN_FILENO, TCSANOW, &state.termios)) {
 		EXIT("tcgetattr()");
 	}
 }
 
+/* Gets cursor location from shell */
 static void
 location(int *r, int *c)
 {
@@ -71,6 +75,7 @@ location(int *r, int *c)
 	}
 }
 
+/* Parses command line to interpret commands */
 static const char *
 read_line(void)
 {

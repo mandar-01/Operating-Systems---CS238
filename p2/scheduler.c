@@ -131,9 +131,10 @@ int scheduler_create(scheduler_fnc_t fnc, void *arg)
 
 void schedule(void)
 {
+    Thread *next;
     setjmp(state.ctx);
 
-    Thread *next = thread_candidate();
+    next = thread_candidate();
     fflush(stdout);
     if (next == NULL)
     {
