@@ -38,7 +38,6 @@
 /* research the above Needed API and design accordingly */
 
 #define SCM_META_SIZE sizeof(size_t)
-uint32_t *VIRT_ADDR = (uint32_t *)0x600000000000;
 
 struct scm {
    int fd;
@@ -50,6 +49,7 @@ struct scm {
 struct scm *scm_open(const char *pathname, int truncate) {
    struct scm *scm = (struct scm *)malloc(sizeof(struct scm));
    struct stat sb;
+   void *VIRT_ADDR;
    int flags;
 
    if (!scm) {
@@ -77,6 +77,13 @@ struct scm *scm_open(const char *pathname, int truncate) {
       return NULL;
    }
 
+   if (!S_ISREG(sb.st_mode)) {
+      fprintf(stderr, "Not a regular file.\n");
+      close(scm->fd);
+      free(scm);
+      return NULL;
+   }
+
    scm->capacity = sb.st_size;
 
    if (truncate) {
@@ -90,8 +97,9 @@ struct scm *scm_open(const char *pathname, int truncate) {
       }
    }
 
-   scm->mem = mmap(VIRT_ADDR, scm->capacity, PROT_READ | PROT_WRITE, MAP_SHARED, scm->fd, 0);
-   if (scm->mem == MAP_FAILED) {
+   VIRT_ADDR = sbrk(0);
+   scm->mem = (char *)mmap(VIRT_ADDR, scm->capacity, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_SHARED, scm->fd, 0);
+   if (scm->mem != (char *)VIRT_ADDR) {
       perror("Error during mmap");
       close(scm->fd);
       free(scm);
@@ -111,15 +119,13 @@ void scm_close(struct scm *scm) {
 }
 
 void *scm_malloc(struct scm *scm, size_t n) {
-   size_t *scm_size = (size_t *)scm->mem;
-   void *ptr = scm->mem + *scm_size + SCM_META_SIZE;
+   void *ptr = scm->mem + scm->size + SCM_META_SIZE;
 
    if (!scm) {
       return NULL;
    }
 
    scm->size += n;
-   *scm_size = scm->size;
    msync(scm->mem, scm->capacity, MS_SYNC);
 
    return ptr;
