@@ -18,154 +18,188 @@
 
 /**
  * Needs:
- *   fstat() => fstat(fd, pointer to struct s) s is of type struct stat s
+ *   fstat()
  *   S_ISREG()
- *   open() => open(pathname, O_RDWR) returns file descriptor. 
-    check if file is a regular file, a file that we can read/write. a flag tells us this. S_ISREG(s.st_mode) s is the same struct (this was in prof's code, erorr check)
-    s.st_size ?
- 
- *   close() => close(file descriptor)
- *   sbrk() => give it address, it will give break point address in heap, VIRT_ADDR = OX600000000000
- *   mmap() => load disk memory in RAM if what we access is not available in RAM. returns address where file is mapped.
-
-    give address you want, will map file to that address.
-    mmap(VIRT_ADDR,length,PROT_READ|PROT_WRITE|MAP_FIXED|MAP_SHARED,file descriptor, 0)
-    whatever returned should match virt_addr. 
- *   munmap() => opposite of mmap()
- *   msync() => 
+ *   open()
+ *   close()
+ *   sbrk()
+ *   mmap()
+ *   munmap()
+ *   msync()
  */
 
 /* research the above Needed API and design accordingly */
 
-#define SCM_META_SIZE sizeof(size_t)
-
+#define VIRT_ADDR 0x600000000000
 struct scm {
-   int fd;
-   size_t capacity;
-   size_t size;
-   char *mem;
+    int fd;
+    char *memory;
+    size_t size;
+    char *memory_start;
+    size_t capacity;
+    size_t used_memory;
 };
 
-struct scm *scm_open(const char *pathname, int truncate) {
-   struct scm *scm = (struct scm *)malloc(sizeof(struct scm));
-   struct stat sb;
-   void *VIRT_ADDR;
-   int flags;
+typedef struct scm_meta {
+    size_t used_memory;
+} scm_meta_t;
 
-   if (!scm) {
-      fprintf(stderr, "Failed to allocate memory for SCM handle.\n");
-      return NULL;
-   }
+/**
+ * Initializes an SCM region using the file specified in pathname as the
+ * backing device, opening the regsion for memory allocation activities.
+ *
+ * pathname: the file pathname of the backing device
+ * truncate: if non-zero, truncates the SCM region, clearning all data
+ *
+ * return: an opaque handle or NULL on error
+ */
 
-   flags = O_RDWR;
+struct scm *scm_open(const char *pathname, int truncate)
+{
+    int fd;
+    struct stat stat;
+    void *mapped_addr;
+    struct scm *scm;
+    scm_meta_t *meta;
 
-   if (truncate) {
-      flags |= O_TRUNC;
-   }
+    fd = open(pathname, O_RDWR);
+    if (fd == -1) {
+        EXIT("Fail to open file!");
+    }
 
-   scm->fd = open(pathname, flags);
-   if (scm->fd == -1) {
-      perror("Error in opening the file");
-      free(scm);
-      return NULL;
-   }
+    if (fstat(fd, &stat) == -1) {
+        EXIT("Fail to get file stat!");
+    }
 
-   if (fstat(scm->fd, &sb) == -1) {
-      perror("Error during fstat");
-      close(scm->fd);
-      free(scm);
-      return NULL;
-   }
+    mapped_addr = mmap((void *)VIRT_ADDR,
+                  stat.st_size,
+                  PROT_READ | PROT_WRITE,
+                  MAP_FIXED | MAP_SHARED,
+                  fd,
+                  0);
+    if (mapped_addr == MAP_FAILED) {
+        EXIT("Fail to map file!");
+    }
 
-   if (!S_ISREG(sb.st_mode)) {
-      fprintf(stderr, "Not a regular file.\n");
-      close(scm->fd);
-      free(scm);
-      return NULL;
-   }
+    scm = (struct scm *) malloc(sizeof(struct scm));
+    scm->fd = fd;
+    scm->memory = mapped_addr;
+    scm->memory_start = scm->memory + sizeof(scm_meta_t);
+    scm->size = stat.st_size;
+    scm->capacity = stat.st_size - sizeof(scm_meta_t);
 
-   scm->capacity = sb.st_size;
-
-   if (truncate) {
-      scm->size = 0;
-   } else {
-      if (read(scm->fd, &scm->size, sizeof(size_t)) == -1) {
-         perror("read");
-         close(scm->fd);
-         free(scm);
-         return NULL;
-      }
-   }
-
-   VIRT_ADDR = sbrk(0);
-   scm->mem = (char *)mmap(VIRT_ADDR, scm->capacity, PROT_READ | PROT_WRITE, MAP_FIXED | MAP_SHARED, scm->fd, 0);
-   if (scm->mem != (char *)VIRT_ADDR) {
-      perror("Error during mmap");
-      close(scm->fd);
-      free(scm);
-      return NULL;
-   }
-
-   return scm;
+    if (!truncate) {
+        meta = (scm_meta_t *)scm->memory;
+        scm->used_memory = meta->used_memory;
+    }
+    return scm;
 }
 
-void scm_close(struct scm *scm) {
-   if (scm) {
-      msync(scm->mem, scm->capacity, MS_SYNC);
-      munmap(scm->mem, scm->capacity);
-      close(scm->fd);
-      free(scm);
-   }
+/**
+ * Closes a previously opened SCM handle.
+ *
+ * scm: an opaque handle previously obtained by calling scm_open()
+ *
+ * Note: scm may be NULL
+ */
+
+void scm_close(struct scm *scm)
+{
+    scm_meta_t *meta = (scm_meta_t *)scm->memory;
+    meta->used_memory = scm->used_memory;
+
+    if (munmap(scm->memory, scm->capacity) == -1) {
+        EXIT("Error while unmmapping");
+    }
+    close(scm->fd);
+
+    free(scm);
 }
 
-void *scm_malloc(struct scm *scm, size_t n) {
-   void *ptr = scm->mem + scm->size + SCM_META_SIZE;
+/**
+ * Analogous to the standard C malloc function, but using SCM region.
+ *
+ * scm: an opaque handle previously obtained by calling scm_open()
+ * n  : the size of the requested memory in bytes
+ *
+ * return: a pointer to the start of the allocated memory or NULL on error
+ */
 
-   if (!scm) {
-      return NULL;
-   }
+void *scm_malloc(struct scm *scm, size_t n)
+{
+  
+    char *next_allocation = NULL; 
+    next_allocation = scm->memory_start + scm->used_memory;
 
-   scm->size += n;
-   msync(scm->mem, scm->capacity, MS_SYNC);
+    scm->used_memory += n;
 
-   return ptr;
+    return next_allocation;
 }
 
-char *scm_strdup(struct scm *scm, const char *s) {
-   size_t len = strlen(s) + 1;
-   char *ptr = scm_malloc(scm, len);
-   
-   if (!scm) {
-      return NULL;
-   }
+/**
+ * Analogous to the standard C strdup function, but using SCM region.
+ *
+ * scm: an opaque handle previously obtained by calling scm_open()
+ * s  : a C string to be duplicated.
+ *
+ * return: the base memory address of the duplicated C string or NULL on error
+ */
 
-   if (ptr) {
-      memcpy(ptr, s, len);
-   }
-
-   return ptr;
+char *scm_strdup(struct scm *scm, const char *s)
+{
+    size_t n = strlen(s);
+    char *mem = (char *) scm_malloc(scm, n);
+    memset(mem, 0, n);
+    strcpy(mem, s);
+    return mem;
 }
 
-size_t scm_utilized(const struct scm *scm) {
-   if (!scm) {
-      return 0;
-   }
-   
-   return scm->size;
+/**
+ * Analogous to the standard C free function, but using SCM region.
+ *
+ * scm: an opaque handle previously obtained by calling scm_open()
+ * p  : a pointer to the start of a previously allocated memory
+ */
+
+void scm_free(struct scm *scm, void *p);
+
+/**
+ * Returns the number of SCM bytes utilized thus far.
+ *
+ * scm: an opaque handle previously obtained by calling scm_open()
+ *
+ * return: the number of bytes utilized thus far
+ */
+
+size_t scm_utilized(const struct scm *scm)
+{
+    return scm->used_memory;
 }
 
-size_t scm_capacity(const struct scm *scm) {
-   if (!scm) {
-      return 0;
-   }
-   
-   return scm->capacity;
+/**
+ * Returns the number of SCM bytes available in total.
+ *
+ * scm: an opaque handle previously obtained by calling scm_open()
+ *
+ * return: the number of bytes available in total
+ */
+
+size_t scm_capacity(const struct scm *scm)
+{
+    return scm->capacity;
 }
 
-void *scm_mbase(struct scm *scm) {
-   if (!scm) {
-      return NULL;
-   }
-   
-   return scm->mem + SCM_META_SIZE;
+/**
+ * Returns the base memory address withn the SCM region, i.e., the memory
+ * pointer that would have been returned by the first call to scm_malloc()
+ * after a truncated initialization.
+ *
+ * scm: an opaque handle previously obtained by calling scm_open()
+ *
+ * return: the base memory address within the SCM region
+ */
+
+void *scm_mbase(struct scm *scm)
+{
+    return scm->memory_start;
 }
