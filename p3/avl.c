@@ -133,6 +133,86 @@ update(struct avl *avl, struct node *root, const char *item)
 	return root;
 }
 
+static struct node *
+find_min(struct node *node)
+{
+    while (node->left) {
+        node = node->left;
+    }
+    return node;
+}
+
+static struct node*
+delete(struct avl *avl, struct node *root, const char *item)
+{
+    int cmp;
+    int balancefactor;
+    struct node *temp;
+    void *str_to_delete;
+    if (root == NULL)
+         return root;
+
+     cmp = strcmp(item, root->item);
+
+     if (cmp < 0)
+         root->left = delete(avl, root->left, item);
+     else if (cmp > 0)
+         root->right = delete(avl, root->right, item);
+     else {
+         if (root->count > 1) {
+             root->count--;
+         } else {
+             if (root->left == NULL) {
+                 struct node *temp = root->right;
+                 scm_free(avl->scm, (void *)root->item);
+                 scm_free(avl->scm, root);
+                 return temp;
+             } else if (root->right == NULL) {
+                 struct node *temp = root->left;
+                 scm_free(avl->scm, (void *)root->item);
+                 scm_free(avl->scm, root);
+                 return temp;
+             }
+
+             temp = find_min(root->right);
+             str_to_delete = (void*)root->item;
+             root->item = scm_strdup(avl->scm, temp->item);
+             root->count = temp->count;
+             scm_free(avl->scm, str_to_delete);
+             temp->count = 1;
+
+			if (root->count == 1) {
+				avl->state->unique--;
+			}
+
+            root->right = delete(avl, root->right, temp->item);
+         }
+		avl->state->items--;
+     }
+     root->depth = depth(root->left,root->right);
+     balancefactor = balance(root);
+
+     if (balancefactor > 1) {
+         if (balance(root->left) >= 0)
+             return rotate_right(root);
+         else {
+             root->left = rotate_left(root->left);
+             return rotate_right(root);
+         }
+     }
+
+     if (balancefactor < -1) {
+         if (balance(root->right) <= 0)
+             return rotate_left(root);
+         else {
+             root->right = rotate_right(root->right);
+             return rotate_left(root);
+         }
+     }
+
+   return root;
+}
+
 static void
 traverse(struct node *node, avl_fnc_t fnc, void *arg)
 {
@@ -196,6 +276,22 @@ avl_insert(struct avl *avl, const char *item)
 
 	if (!(root = update(avl, avl->state->root, item))) {
 		TRACE(0);
+		return -1;
+	}
+	avl->state->root = root;
+	return 0;
+}
+
+int
+avl_delete(struct avl *avl, const char *item)
+{
+	struct node *root;
+
+	assert( avl );
+	assert( safe_strlen(item) );
+
+	if (!(root = delete(avl, avl->state->root, item))) {
+		TRACE("AVL is empty!");
 		return -1;
 	}
 	avl->state->root = root;
