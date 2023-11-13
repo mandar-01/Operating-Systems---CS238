@@ -31,7 +31,8 @@
 /* research the above Needed API and design accordingly */
 
 #define VIRT_ADDR 0x600000000000
-struct scm {
+struct scm
+{
     int fd;
     char *memory;
     size_t size;
@@ -40,9 +41,10 @@ struct scm {
     size_t used_memory;
 };
 
-typedef struct scm_meta {
+struct scm_meta
+{
     size_t used_memory;
-} scm_meta_t;
+};
 
 /**
  * Initializes an SCM region using the file specified in pathname as the
@@ -54,42 +56,58 @@ typedef struct scm_meta {
  * return: an opaque handle or NULL on error
  */
 
+void *mapFile(int fd, size_t size)
+{
+    void *mapped_addr;
+    mapped_addr = mmap((void *)VIRT_ADDR,
+                       size,
+                       PROT_READ | PROT_WRITE,
+                       MAP_FIXED | MAP_SHARED,
+                       fd,
+                       0);
+
+    if (MAP_FAILED == mapped_addr)
+    {
+        EXIT("Error in mapping the given file");
+    }
+
+    return mapped_addr;
+}
+
 struct scm *scm_open(const char *pathname, int truncate)
 {
     int fd;
     struct stat stat;
     void *mapped_addr;
     struct scm *scm;
-    scm_meta_t *meta;
+    struct scm_meta *meta;
+    unsigned long meta_size;
 
     fd = open(pathname, O_RDWR);
-    if (fd == -1) {
-        EXIT("Fail to open file!");
+    if (fd == -1)
+    {
+        EXIT("The specified filepath failed to open");
     }
 
-    if (fstat(fd, &stat) == -1) {
-        EXIT("Fail to get file stat!");
+    if (fstat(fd, &stat) == -1)
+    {
+        EXIT("Error in getting the fstat for the file");
     }
 
-    mapped_addr = mmap((void *)VIRT_ADDR,
-                  stat.st_size,
-                  PROT_READ | PROT_WRITE,
-                  MAP_FIXED | MAP_SHARED,
-                  fd,
-                  0);
-    if (mapped_addr == MAP_FAILED) {
-        EXIT("Fail to map file!");
-    }
+    mapped_addr = mapFile(fd, stat.st_size);
 
-    scm = (struct scm *) malloc(sizeof(struct scm));
+    meta_size = sizeof(struct scm_meta);
+
+    scm = (struct scm *)malloc(sizeof(struct scm));
     scm->fd = fd;
     scm->memory = mapped_addr;
-    scm->memory_start = scm->memory + sizeof(scm_meta_t);
+    scm->memory_start = scm->memory + meta_size;
     scm->size = stat.st_size;
-    scm->capacity = stat.st_size - sizeof(scm_meta_t);
+    scm->capacity = stat.st_size - meta_size;
 
-    if (!truncate) {
-        meta = (scm_meta_t *)scm->memory;
+    if (0 == truncate)
+    {
+        meta = (struct scm_meta *)scm->memory;
         scm->used_memory = meta->used_memory;
     }
     return scm;
@@ -105,11 +123,12 @@ struct scm *scm_open(const char *pathname, int truncate)
 
 void scm_close(struct scm *scm)
 {
-    scm_meta_t *meta = (scm_meta_t *)scm->memory;
+    struct scm_meta *meta = (struct scm_meta *)scm->memory;
     meta->used_memory = scm->used_memory;
 
-    if (munmap(scm->memory, scm->capacity) == -1) {
-        EXIT("Error while unmmapping");
+    if (munmap(scm->memory, scm->capacity) == -1)
+    {
+        EXIT("Error while unmmapping the scm handle");
     }
     close(scm->fd);
 
@@ -127,8 +146,8 @@ void scm_close(struct scm *scm)
 
 void *scm_malloc(struct scm *scm, size_t n)
 {
-  
-    char *next_allocation = NULL; 
+
+    char *next_allocation = NULL;
     next_allocation = scm->memory_start + scm->used_memory;
 
     scm->used_memory += n;
@@ -148,7 +167,7 @@ void *scm_malloc(struct scm *scm, size_t n)
 char *scm_strdup(struct scm *scm, const char *s)
 {
     size_t n = strlen(s);
-    char *mem = (char *) scm_malloc(scm, n);
+    char *mem = (char *)scm_malloc(scm, n);
     memset(mem, 0, n);
     strcpy(mem, s);
     return mem;
