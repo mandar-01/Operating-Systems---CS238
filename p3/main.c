@@ -37,7 +37,7 @@ insert(struct avl *avl, const char *s)
 static int
 delete(struct avl *avl, const char *s)
 {
-	if (avl_remove(avl, s)) {
+	if (avl_delete(avl, s)) {
 		printf("error: failed to delete '%s'", s);
 	}
 	return 0;

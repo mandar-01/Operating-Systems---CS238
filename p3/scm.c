@@ -127,7 +127,7 @@ void *scm_malloc(struct scm *scm, size_t n)
     char *hidden_data = NULL;
 
     if (scm->used_memory + alloc_mem > scm->capacity) {
-        TRACE("Excceed memory limit!");
+        TRACE("Exceed memory limit!");
         return NULL;
     }
 
@@ -135,7 +135,7 @@ void *scm_malloc(struct scm *scm, size_t n)
     *((size_t *)hidden_data) = n;
     mem = hidden_data + hidden_size;
 
-    printf("scm_malloc %p %lu\n", hidden_data, alloc_mem);
+    printf("Address %p Allocated memory %lu\n", hidden_data, alloc_mem);
 
     scm->used_memory += alloc_mem;
 
@@ -155,7 +155,7 @@ void scm_free(struct scm *scm, void *p) {
     char *hidden_data = (char *)p - SCM_META_SIZE;
     size_t n = *((size_t *)hidden_data);
     memset(hidden_data, 0, SCM_META_SIZE + n);
-    printf("scm_free %p %lu\n", hidden_data, SCM_META_SIZE + n);
+    printf("Address %p Size %lu\n", hidden_data, SCM_META_SIZE + n);
     UNUSED(scm);
 }
 

@@ -159,7 +159,7 @@ traverse(struct node *node, avl_fnc_t fnc, void *arg)
 	}
 }
 
-struct node *inorder_successor(struct node *node)
+struct node *min_node(struct node *node)
 {
 	while (node->left)
 	{
@@ -168,7 +168,7 @@ struct node *inorder_successor(struct node *node)
 	return node;
 }
 
-static struct node *remove_node(struct avl *avl, struct node *root, const char *item)
+static struct node *delete_node(struct avl *avl, struct node *root, const char *item)
 {
 	int d;
 	
@@ -183,11 +183,11 @@ static struct node *remove_node(struct avl *avl, struct node *root, const char *
 
 	if (d < 0)
 	{
-		root->left = remove_node (avl, root->left, item);
+		root->left = delete_node (avl, root->left, item);
 	}
 	else if (d > 0)
 	{
-		root->right = remove_node (avl, root->right, item);
+		root->right = delete_node (avl, root->right, item);
 	}
 	else
 	{		
@@ -215,7 +215,7 @@ static struct node *remove_node(struct avl *avl, struct node *root, const char *
 				return temp;
 			}
 
-			temp = inorder_successor(root->right);
+			temp = min_node(root->right);
 			str_to_delete = (void *)root->item;
 
 			root->item = scm_strdup(avl->scm, temp->item);
@@ -224,7 +224,7 @@ static struct node *remove_node(struct avl *avl, struct node *root, const char *
 			scm_free(avl->scm, str_to_delete);
 			temp->count = 1;
 
-			root->right = remove_node (avl, root->right, temp->item);
+			root->right = delete_node (avl, root->right, temp->item);
 		}
 	}
 
@@ -319,13 +319,19 @@ int avl_insert(struct avl *avl, const char *item)
 	return 0;
 }
 
-int avl_remove(struct avl *avl, const char *item)
+int
+avl_delete(struct avl *avl, const char *item)
 {
-	assert(avl);
-	assert(safe_strlen(item));
+	struct node *root;
 
-	avl->state->root = remove_node (avl, avl->state->root, item);
+	assert( avl );
+	assert( safe_strlen(item) );
 
+	if (!(root = delete_node(avl, avl->state->root, item))) {
+		TRACE("AVL is empty!");
+		return -1;
+	}
+	avl->state->root = root;
 	return 0;
 }
 
