@@ -22,7 +22,7 @@ void avl_close(struct avl *avl);
 
 int avl_insert(struct avl *avl, const char *item);
 
-int avl_delete(struct avl *avl, const char *item);
+int avl_remove(struct avl *avl, const char *item);
 
 uint64_t avl_exists(const struct avl *avl, const char *item);
 

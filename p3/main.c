@@ -37,7 +37,7 @@ insert(struct avl *avl, const char *s)
 static int
 delete(struct avl *avl, const char *s)
 {
-	if (avl_delete(avl, s)) {
+	if (avl_remove(avl, s)) {
 		printf("error: failed to delete '%s'", s);
 	}
 	return 0;
@@ -115,7 +115,7 @@ help(struct avl *avl, const char *s)
 	       "  load pathname : load words from file @ 'pathname'\n"
 	       "  insert word   : insert 'word'\n"
 	       "  exists word   : check if 'word' exists\n"
-		   "  delete word   : delete all ocurrences of 'word'\n"
+		   "  delete word   : delete one occurrence of 'word'\n"
 	       "\n");
 	return 0;
 }
