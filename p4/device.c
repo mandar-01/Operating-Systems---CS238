@@ -36,6 +36,10 @@ struct device {
 	uint64_t block; /* immutable */
 };
 
+/*
+Determines size of device and block size
+*/
+
 static int
 geometry(struct device *device)
 {
@@ -67,6 +71,7 @@ geometry(struct device *device)
 		TRACE("bad device geometry");
 		return -1;
 	}
+	/* keeps size aligned with the block size due to floor implementation*/
 	device->size = u64 / u32 * u32;
 	device->block = u32;
 	return 0;
@@ -84,6 +89,9 @@ device_open(const char *pathname)
 		return NULL;
 	}
 	memset(device, 0, sizeof (struct device));
+	/*
+	O_DIRECT- perform operations directly with disk memory
+	*/
 	if (0 >= (device->fd = open(pathname, O_RDWR | O_DIRECT))) {
 		if (EACCES == errno) {
 			device_close(device);
@@ -116,13 +124,26 @@ device_close(struct device *device)
 	FREE(device);
 }
 
+/*
+Read data from device into buffer starting from the offset address for the given length
+Offset address is page-aligned
+*/
+
 int
 device_read(struct device *device, void *buf, uint64_t off, uint64_t len)
 {
+	/*
+	Sanity checks to check memory alignment and block size limitations
+	*/
+
 	assert( !len || buf );
 	assert( 0 == (off % device->block) );
 	assert( 0 == (len % device->block) );
 	assert( (off + len) <= device->size );
+
+	/*
+	Checking runtime errors
+	*/
 
 	if (len != (uint64_t)pread(device->fd, buf, (size_t)len, (off_t)off)) {
 		TRACE("pread()");

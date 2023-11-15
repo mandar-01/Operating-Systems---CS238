@@ -46,6 +46,10 @@ void logfs_close(struct logfs *logfs);
  * return: 0 on success, otherwise error
  */
 
+/*
+Offset and length alignment need not exist
+*/
+
 int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len);
 
 /**
@@ -57,6 +61,10 @@ int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len);
  *
  * return: 0 on success, otherwise error
  */
+
+/*
+NO offset as we are linearly appending blocks to disk
+*/
 
 int logfs_append(struct logfs *logfs, const void *buf, uint64_t len);
 

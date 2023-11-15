@@ -1,0 +1,12 @@
+Implementing a key value store (Read up)
+
+DO NOT USE sda block devices for this project, NvMe drives or loop devices can be used
+lsblk to list devices
+
+sudo ./cs238 /dev/<block device>
+
+5 tests to pass- basic logic, heavy rewrite, read write single, read wwrite small, read write large
+
+dd ifm/dev/zero of=file bs=4096 count=10000
+
+Abstraction: kvraw -> logfs -> device

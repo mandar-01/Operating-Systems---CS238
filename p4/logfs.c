@@ -29,3 +29,8 @@
  */
 
 /* research the above Needed API and design accordingly */
+
+
+/*
+log fs abstraction to disk tape includes append command where offset need not be there. Just the buffer and length is enough as it linearly attaches blocks to memory.
+*/

@@ -7,6 +7,12 @@
  * kvraw.c
  */
 
+/*
+For kvraw abstraction to disk tape, Key and value buffers are passed with metadata for each block
+If a new value is allocated to existing key, address are linked and blocks are chained with each other to maintain value history and to enable versioning
+Deleting a key-value can also be linked at the end of the chain with no value, which can further be linked if we decide to assign new value to a past key
+*/
+
 #include "logfs.h"
 #include "kvraw.h"
 
@@ -22,13 +28,18 @@ struct kvraw {
 
 #pragma pack(push, 1)
 struct meta {
+	/* Key and value characters */
 	char mark[2];
+	/* Offset of previous occurence of key in the chain */
 	uint64_t off;
 	uint16_t key_len;
 	uint32_t val_len;
 };
 #pragma pack(pop)
 
+/*
+Updates buffer with meta information
+*/
 static int
 read_meta(struct kvraw *kvraw, uint64_t off, struct meta *meta)
 {

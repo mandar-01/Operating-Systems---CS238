@@ -7,6 +7,10 @@
  * index.c
  */
 
+/*
+When looking up a key, check hash table to see if key exists which can point to the latest key-value block in the disk
+*/
+
 #include "index.h"
 
 #define LOAD 0.70
@@ -19,6 +23,11 @@ struct index {
 		uint64_t off;
 	} *maps;
 };
+
+/*
+Shuffling bits around to create a 64-bit random hash, can be replaced by hash function of choice.
+One to one mapping is maintained.
+*/
 
 static uint64_t
 hash(const void *buf, uint64_t len)
@@ -96,6 +105,10 @@ update(struct index *index, uint64_t key)
 	return NULL;
 }
 
+/*
+Expanding memory of hash table
+*/
+
 static int
 grow(struct index *index)
 {
@@ -143,6 +156,10 @@ index_close(struct index *index)
 	}
 	FREE(index);
 }
+
+/*
+Returns location in memory corresponding to the hash value
+*/
 
 uint64_t *
 index_update(struct index *index, const void *key_, uint64_t key_len)
