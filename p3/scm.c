@@ -110,6 +110,11 @@ void scm_close(struct scm *scm)
     struct scm_meta *meta = (struct scm_meta *)scm->memory;
     meta->used_memory = scm->used_memory;
 
+    if (msync(scm->memory, scm->capacity, MS_SYNC) == -1)
+    {
+        EXIT("Error while syncing memory");
+    }
+
     if (munmap(scm->memory, scm->capacity) == -1)
     {
         EXIT("Error while unmmapping the scm handle");
@@ -121,8 +126,7 @@ void scm_close(struct scm *scm)
 
 void *scm_malloc(struct scm *scm, size_t n)
 {
-    const size_t hidden_size = sizeof(size_t);
-    const size_t alloc_mem = n + hidden_size;
+    const size_t alloc_mem = n + SCM_META_SIZE;
     char *mem = NULL;
     char *hidden_data = NULL;
 
@@ -133,7 +137,7 @@ void *scm_malloc(struct scm *scm, size_t n)
 
     hidden_data = scm->memory_start + scm->used_memory;
     *((size_t *)hidden_data) = n;
-    mem = hidden_data + hidden_size;
+    mem = hidden_data + SCM_META_SIZE;
 
     printf("Address %p Allocated memory %lu\n", hidden_data, alloc_mem);
 
@@ -151,11 +155,11 @@ char *scm_strdup(struct scm *scm, const char *s)
     return mem;
 }
 
-void scm_free(struct scm *scm, void *p) {
+void scm_free(struct scm *scm, void *p)
+{
     char *hidden_data = (char *)p - SCM_META_SIZE;
-    size_t n = *((size_t *)hidden_data);
-    memset(hidden_data, 0, SCM_META_SIZE + n);
-    printf("Address %p Size %lu\n", hidden_data, SCM_META_SIZE + n);
+    size_t offset = *((size_t *)hidden_data);
+    memset(hidden_data, 0, SCM_META_SIZE + offset);
     UNUSED(scm);
 }
 
