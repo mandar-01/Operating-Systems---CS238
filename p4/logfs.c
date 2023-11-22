@@ -34,6 +34,15 @@
 log fs abstraction to disk tape includes append command where offset need not be there. Just the buffer and length is enough as it linearly attaches blocks to memory.
 */
 
+/*
+This struct represents the log file system. It includes:
+
+struct device *dev: A pointer to a structure representing the block device.
+pthread_mutex_t mutex: A mutex for controlling access to the logfs structure to ensure thread safety.
+pthread_cond_t cond: A condition variable for signaling and waiting for changes in the logfs structure.
+uint64_t next_offset: The next offset for append operations in the log file.
+*/
+
 struct logfs {
     struct device *dev;
     pthread_mutex_t mutex;
@@ -49,6 +58,12 @@ struct logfs {
  *
  * return: an opaque handle or NULL on error
  */
+
+/*
+This function opens a block device specified by pathname for buffered I/O using an append-only log structure.
+It allocates memory for the struct logfs, initializes the block device using device_open, and initializes the mutex and condition variable.
+Returns a pointer to the struct logfs or NULL on error.
+*/
 
 struct logfs *logfs_open(const char *pathname) {
     struct logfs *log_fs;
@@ -94,6 +109,11 @@ struct logfs *logfs_open(const char *pathname) {
  * Note: logfs may be NULL.
  */
 
+/*
+This function closes a previously opened logfs handle.
+It releases resources such as the block device, mutex, condition variable, and the logfs structure itself.
+*/
+
 void logfs_close(struct logfs *logfs) {
     if (!logfs) {
         return;
@@ -119,6 +139,12 @@ void logfs_close(struct logfs *logfs) {
 
 /*
 Offset and length alignment need not exist
+*/
+
+/*
+This function performs a random read of len bytes at the location specified by off from the logfs.
+It checks if the read operation is within the bounds of the log and then calls device_read to perform the actual read.
+Returns 0 on success or an error code on failure.
 */
 
 int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len) {
@@ -149,6 +175,13 @@ int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len) {
 
 /*
 NO offset as we are linearly appending blocks to disk
+*/
+
+/*
+This function appends len bytes to the logfs.
+It updates the next_offset and then calls device_write to perform the actual write.
+The function uses a mutex to ensure that the next_offset is updated atomically and a condition variable to signal any waiting threads that the log has been modified.
+Returns 0 on success or an error code on failure.
 */
 
 int logfs_append(struct logfs *logfs, const void *buf, uint64_t len) {
