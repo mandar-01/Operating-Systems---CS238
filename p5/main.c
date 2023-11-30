@@ -12,9 +12,10 @@
 
 /**
  * Needs:
- *   signal()
+ *   signal() -> to handle ctrl_c
  */
 
+/* done is set if ctrl_c pressed*/
 static volatile int done;
 
 static void
@@ -35,6 +36,7 @@ cpu_util(const char *s)
 	uint64_t i;
 
 	/*
+		these are what the 7 integers represent, cpu utilization by each of below category
 	  user
 	  nice
 	  system
@@ -43,7 +45,9 @@ cpu_util(const char *s)
 	  irq
 	  softirq
 	*/
-
+	
+	/*read 7 integers from 1st line of proc/stat*/
+	/* strstr sets p to first unsigned integer, since the first word is cpu and scanf would fail to read integer there.*/
 	if (!(p = strstr(s, " ")) ||
 	    (7 != sscanf(p,
 			 "%u %u %u %u %u %u %u",
@@ -56,10 +60,13 @@ cpu_util(const char *s)
 			 &vector[6]))) {
 		return 0;
 	}
+
+	/* total cpu utilization is sum of all 7 categories*/
 	sum = 0.0;
 	for (i=0; i<ARRAY_SIZE(vector); ++i) {
 		sum += vector[i];
 	}
+	/*calculate actual cpu util differentiating previous sum and current sum*/
 	util = (1.0 - (vector[3] - vector_[3]) / (double)(sum - sum_)) * 100.0;
 	sum_ = sum;
 	for (i=0; i<ARRAY_SIZE(vector); ++i) {
