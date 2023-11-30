@@ -8,8 +8,11 @@
  */
 
 #include <pthread.h>
+#include <inttypes.h>
 #include "device.h"
 #include "logfs.h"
+#include <unistd.h>
+#include "system.h"
 
 #define WCACHE_BLOCKS 32
 #define RCACHE_BLOCKS 256
@@ -30,172 +33,148 @@
 
 /* research the above Needed API and design accordingly */
 
-/*
-log fs abstraction to disk tape includes append command where offset need not be there. Just the buffer and length is enough as it linearly attaches blocks to memory.
+#define BLOCK_SIZE 4096
+int remaining = 0;
 
-This struct represents the log file system. It includes:
-
-struct device *dev: A pointer to a structure representing the block device.
-pthread_mutex_t mutex: A mutex for controlling access to the logfs structure to ensure thread safety.
-pthread_cond_t cond: A condition variable for signaling and waiting for changes in the logfs structure.
-uint64_t next_offset: The next offset for append operations in the log file.
-*/
-
-struct logfs {
-    struct device *dev;
+struct logfs
+{
     pthread_mutex_t mutex;
+    struct device *device;
     pthread_cond_t cond;
-    uint64_t next_offset;
+    pthread_t consumer;
+    char *queue;
+    uint64_t utilized;
+    uint64_t head;
+    uint64_t tail;
+    int terminate;
+    int flushStart;
+    int flushComplete;
 };
 
-/**
- * Opens the block device specified in pathname for buffered I/O using an
- * append only log structure.
- *
- * pathname: the pathname of the block device
- *
- * return: an opaque handle or NULL on error
- */
-
-/*
-This function opens a block device specified by pathname for buffered I/O using an append-only log structure.
-It allocates memory for the struct logfs, initializes the block device using device_open, and initializes the mutex and condition variable.
-Returns a pointer to the struct logfs or NULL on error.
-*/
-
-struct logfs *logfs_open(const char *pathname) {
-    struct logfs *log_fs;
-    log_fs = malloc(sizeof(struct logfs));
-    
-    if (!log_fs) {
-        TRACE("out of memory");
-        return NULL;
+void *threadFunction(void *arg)
+{
+    struct logfs *logfs = (struct logfs *)arg;
+    while (1)
+    {
+        if (logfs->terminate == 1)
+            break;
+        
+        while (logfs->tail - logfs->head < BLOCK_SIZE && logfs->terminate == 0)
+        {
+            pthread_cond_wait(&logfs->cond, &logfs->mutex);
+            printf("%d\n",logfs->flushStart);
+            fflush(stdout);
+            if(logfs->flushStart == 1){
+                break;
+            }
+        }
+        printf("Consumer signalled\n");
+        fflush(stdout);
+        if (logfs->flushStart == 1)
+        {   
+            printf("Flushing the queue\n");
+            pthread_mutex_lock(&logfs->mutex);
+            char *buf;
+            buf = (char *)malloc(sizeof(char) * BLOCK_SIZE);
+            memcpy(buf, logfs->queue + logfs->head, BLOCK_SIZE);
+            if (0 == device_write(logfs->device, buf, logfs->utilized, BLOCK_SIZE))
+            {
+                printf("Data Written to disk\n");
+                logfs->utilized += logfs->tail - logfs->head;
+            }
+            logfs->flushComplete = 1;
+            printf("Flushing complete\n");
+            printf("Singaling for read\n");
+            pthread_cond_signal(&logfs->cond);
+            pthread_mutex_unlock(&logfs->mutex);
+        }
+        else if (logfs->tail > 0 && logfs->tail - logfs->head >= BLOCK_SIZE)
+        {
+            char *buf;
+            buf = (char *)malloc(sizeof(char) * BLOCK_SIZE);
+            memcpy(buf, logfs->queue + logfs->head, BLOCK_SIZE);
+            logfs->head += BLOCK_SIZE;
+            if (0 == device_write(logfs->device, buf, logfs->utilized, BLOCK_SIZE))
+            {
+                printf("Data Written to disk\n");
+                logfs->utilized += BLOCK_SIZE;
+            }
+        }
     }
-
-    log_fs->dev = device_open(pathname);
-    if (!log_fs->dev) {
-        TRACE("failed to open device");
-        free(log_fs);
-        return NULL;
-    }
-
-    if (pthread_mutex_init(&log_fs->mutex, NULL) != 0) {
-        TRACE("mutex initialization failed");
-        device_close(log_fs->dev);
-        free(log_fs);
-        return NULL;
-    }
-
-    if (pthread_cond_init(&log_fs->cond, NULL) != 0) {
-        TRACE("condition variable initialization failed");
-        pthread_mutex_destroy(&log_fs->mutex);
-        device_close(log_fs->dev);
-        free(log_fs);
-        return NULL;
-    }
-
-    log_fs->next_offset = 0;
-
-    return log_fs;
+    return 0;
 }
 
-/**
- * Closes a previously opened logfs handle.
- *
- * logfs: an opaque handle previously obtained by calling logfs_open()
- *
- * Note: logfs may be NULL.
- */
+struct logfs *logfs_open(const char *pathname)
+{
+    struct logfs *logfs = (struct logfs *)malloc(sizeof(struct logfs));
+    logfs->queue = (char *)malloc(sizeof(char) * WCACHE_BLOCKS * BLOCK_SIZE);
+    logfs->device = device_open(pathname);
+    pthread_mutex_init(&logfs->mutex, NULL);
+    pthread_cond_init(&logfs->cond, NULL);
+    pthread_create(&logfs->consumer, NULL, threadFunction, logfs);
+    logfs->terminate = 0;
+    logfs->utilized = 0;
+    logfs->head = 0;
+    logfs->tail = 0;
+    logfs->flushStart = 0;
+    logfs->flushComplete = 0;
 
-/*
-This function closes a previously opened logfs handle.
-It releases resources such as the block device, mutex, condition variable, and the logfs structure itself.
-*/
+    return logfs;
+}
 
-void logfs_close(struct logfs *logfs) {
-    if (!logfs) {
-        return;
-    }
-
-    pthread_mutex_destroy(&logfs->mutex);
+void logfs_close(struct logfs *logfs)
+{
+    logfs->terminate = 1;
+    pthread_cond_signal(&logfs->cond);
+    printf("File Data Written = %" PRIu64 "and Queue size %" PRIu64 "\n", logfs->utilized, logfs->tail);
+    pthread_join(logfs->consumer, NULL);
     pthread_cond_destroy(&logfs->cond);
-    device_close(logfs->dev);
-
+    pthread_mutex_destroy(&logfs->mutex);
     free(logfs);
 }
 
-/**
- * Random read of len bytes at location specified in off from the logfs.
- *
- * logfs: an opaque handle previously obtained by calling logfs_open()
- * buf  : a region of memory large enough to receive len bytes
- * off  : the starting byte offset
- * len  : the number of bytes to read
- *
- * return: 0 on success, otherwise error
- */
-
-/*
-Offset and length alignment need not exist
-
-This function performs a random read of len bytes at the location specified by off from the logfs.
-It checks if the read operation is within the bounds of the log and then calls device_read to perform the actual read.
-Returns 0 on success or an error code on failure.
-*/
-
-int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len) {
-    if (!logfs || !buf) {
-        return -1;
-    }
-
+int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len)
+{   
+    printf("Read request arrived\n");
     pthread_mutex_lock(&logfs->mutex);
-    if (off + len > logfs->next_offset) {
-        TRACE("attempt to read beyond end of log");
+    // if(off > logfs->tail){
+    //     printf("Offset for read is more than data appended\n");
+    //     return 0;
+    // }
+    while (off > logfs->utilized)
+    {
+        printf("Offset %" PRIu64 " is greater than the file size %" PRIu64 "\n", off, logfs->utilized);
+        logfs->flushStart = 1;
+        pthread_cond_signal(&logfs->cond);
+        while (logfs->flushComplete == 0)
+        {
+            pthread_cond_wait(&logfs->cond, &logfs->mutex);
+        }
+        printf("Flush complete from read func\n");
+        logfs->flushStart = 0;
+        logfs->flushComplete = 0;
+        printf("flush variables reset\n");
+        device_read(logfs->device, buf, off, len);
+        printf("Buffer read from disk:  %s\n", (char *)buf);
+        pthread_cond_signal(&logfs->cond);
         pthread_mutex_unlock(&logfs->mutex);
-        return -1;
+        return 0;
     }
+    printf("Device read offset and length %" PRIu64 "%"PRIu64 "\n", off,len);
+    device_read(logfs->device, buf, 0, BLOCK_SIZE);
+    printf("Buffer read from disk:  %s\n", (char *)buf);
+    pthread_cond_signal(&logfs->cond);
     pthread_mutex_unlock(&logfs->mutex);
-
-    return device_read(logfs->dev, buf, off, len);
+    return 0;
 }
 
-/**
- * Append len bytes to the logfs.
- *
- * logfs: an opaque handle previously obtained by calling logfs_open()
- * buf  : a region of memory holding the len bytes to be written
- * len  : the number of bytes to write
- *
- * return: 0 on success, otherwise error
- */
-
-/*
-NO offset as we are linearly appending blocks to disk
-
-This function appends len bytes to the logfs.
-It updates the next_offset and then calls device_write to perform the actual write.
-The function uses a mutex to ensure that the next_offset is updated atomically and a condition variable to signal any waiting threads that the log has been modified.
-Returns 0 on success or an error code on failure.
-*/
-
-int logfs_append(struct logfs *logfs, const void *buf, uint64_t len) {
-    uint64_t offset;
-    int result;
-    
-    if (!logfs || !buf) {
-        return -1;
-    }
-
+int logfs_append(struct logfs *logfs, const void *buf, uint64_t len)
+{
     pthread_mutex_lock(&logfs->mutex);
-
-    offset = logfs->next_offset;
-    logfs->next_offset += len;
-
-    pthread_mutex_unlock(&logfs->mutex);
-
-    result = device_write(logfs->dev, buf, offset, len);
-
+    memcpy(logfs->queue + logfs->tail, buf, len);
+    logfs->tail += len;
+    printf("Appending done for length %d, now Signalling---------->\n", (int)len);
     pthread_cond_signal(&logfs->cond);
-
-    return result;
+    pthread_mutex_unlock(&logfs->mutex);
+    return 0;
 }
