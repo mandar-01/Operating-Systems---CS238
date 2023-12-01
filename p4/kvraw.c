@@ -152,6 +152,7 @@ kvraw_append(struct kvraw *kvraw,
 	meta.off = (*off);
 	meta.key_len = (uint16_t)key_len;
 	meta.val_len = (uint32_t)val_len;
+
 	if (logfs_append(kvraw->logfs, &meta, META_LEN) ||
 	    logfs_append(kvraw->logfs, key, meta.key_len) ||
 	    logfs_append(kvraw->logfs, val, meta.val_len)) {

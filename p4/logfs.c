@@ -8,8 +8,14 @@
  */
 
 #include <pthread.h>
+#include <inttypes.h>
 #include "device.h"
 #include "logfs.h"
+#include <unistd.h>
+#include "system.h"
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
 
 #define WCACHE_BLOCKS 32
 #define RCACHE_BLOCKS 256
@@ -30,172 +36,280 @@
 
 /* research the above Needed API and design accordingly */
 
-/*
-log fs abstraction to disk tape includes append command where offset need not be there. Just the buffer and length is enough as it linearly attaches blocks to memory.
+typedef struct
+{
+    uint64_t offset;
+    size_t length;
+    char *data;
+} CacheBlock;
 
-This struct represents the log file system. It includes:
+typedef struct AppendData
+{
+    char *data;
+    uint64_t len;
+    struct AppendData *next;
+} AppendData;
 
-struct device *dev: A pointer to a structure representing the block device.
-pthread_mutex_t mutex: A mutex for controlling access to the logfs structure to ensure thread safety.
-pthread_cond_t cond: A condition variable for signaling and waiting for changes in the logfs structure.
-uint64_t next_offset: The next offset for append operations in the log file.
-*/
-
-struct logfs {
-    struct device *dev;
-    pthread_mutex_t mutex;
-    pthread_cond_t cond;
-    uint64_t next_offset;
+struct logfs
+{
+    int block_device;
+    CacheBlock read_cache[RCACHE_BLOCKS];
+    pthread_mutex_t read_mutex;
+    pthread_mutex_t write_mutex;
+    pthread_cond_t write_cond;
+    AppendData *append_queue;
+    AppendData *append_queue_tail;
+    pthread_t worker_thread;
+    uint64_t highest_written_offset;
+    int stop_worker;
 };
 
-/**
- * Opens the block device specified in pathname for buffered I/O using an
- * append only log structure.
- *
- * pathname: the pathname of the block device
- *
- * return: an opaque handle or NULL on error
- */
+static void initialize_read_cache(struct logfs *log)
+{
+    int i;
 
-/*
-This function opens a block device specified by pathname for buffered I/O using an append-only log structure.
-It allocates memory for the struct logfs, initializes the block device using device_open, and initializes the mutex and condition variable.
-Returns a pointer to the struct logfs or NULL on error.
-*/
-
-struct logfs *logfs_open(const char *pathname) {
-    struct logfs *log_fs;
-    log_fs = malloc(sizeof(struct logfs));
-    
-    if (!log_fs) {
-        TRACE("out of memory");
-        return NULL;
+    for (i = 0; i < RCACHE_BLOCKS; ++i)
+    {
+        log->read_cache[i].offset = UINT64_MAX;
+        log->read_cache[i].length = 0;
+        log->read_cache[i].data = NULL;
     }
-
-    log_fs->dev = device_open(pathname);
-    if (!log_fs->dev) {
-        TRACE("failed to open device");
-        free(log_fs);
-        return NULL;
-    }
-
-    if (pthread_mutex_init(&log_fs->mutex, NULL) != 0) {
-        TRACE("mutex initialization failed");
-        device_close(log_fs->dev);
-        free(log_fs);
-        return NULL;
-    }
-
-    if (pthread_cond_init(&log_fs->cond, NULL) != 0) {
-        TRACE("condition variable initialization failed");
-        pthread_mutex_destroy(&log_fs->mutex);
-        device_close(log_fs->dev);
-        free(log_fs);
-        return NULL;
-    }
-
-    log_fs->next_offset = 0;
-
-    return log_fs;
 }
 
-/**
- * Closes a previously opened logfs handle.
- *
- * logfs: an opaque handle previously obtained by calling logfs_open()
- *
- * Note: logfs may be NULL.
- */
+static void *worker_function(void *arg)
+{
+    struct logfs *logfs = (struct logfs *)arg;
+    AppendData *data;
+    ssize_t bytes_written;
+    // int write_status;
 
-/*
-This function closes a previously opened logfs handle.
-It releases resources such as the block device, mutex, condition variable, and the logfs structure itself.
-*/
+    while (1)
+    {
+        pthread_mutex_lock(&logfs->write_mutex);
 
-void logfs_close(struct logfs *logfs) {
-    if (!logfs) {
-        return;
+        while (logfs->append_queue == NULL && !logfs->stop_worker)
+        {
+            pthread_cond_wait(&logfs->write_cond, &logfs->write_mutex);
+        }
+
+        if (logfs->stop_worker && logfs->append_queue == NULL)
+        {
+            pthread_mutex_unlock(&logfs->write_mutex);
+            break;
+        }
+
+        data = logfs->append_queue;
+        logfs->append_queue = data->next;
+        if (logfs->append_queue == NULL)
+        {
+            logfs->append_queue_tail = NULL;
+        }
+
+        bytes_written = pwrite(logfs->block_device, data->data, data->len, logfs->highest_written_offset);
+
+        // if(!device_write(logfs->block_device, data->data, logfs->highest_written_offset, data->len))
+
+        // if(write)
+
+        if (bytes_written > 0)
+        {
+            logfs->highest_written_offset += bytes_written;
+        }
+        else
+        {
+            TRACE(0);
+        }
+
+        pthread_mutex_unlock(&logfs->write_mutex);
+        free(data->data);
+        free(data);
+
+        pthread_cond_broadcast(&logfs->write_cond);
     }
 
-    pthread_mutex_destroy(&logfs->mutex);
-    pthread_cond_destroy(&logfs->cond);
-    device_close(logfs->dev);
-
-    free(logfs);
+    return NULL;
 }
 
-/**
- * Random read of len bytes at location specified in off from the logfs.
- *
- * logfs: an opaque handle previously obtained by calling logfs_open()
- * buf  : a region of memory large enough to receive len bytes
- * off  : the starting byte offset
- * len  : the number of bytes to read
- *
- * return: 0 on success, otherwise error
- */
+struct logfs *logfs_open(const char *pathname)
+{
+    struct logfs *logfs = malloc(sizeof(struct logfs));
+    if (logfs == NULL)
+    {
+        return NULL;
+    }
 
-/*
-Offset and length alignment need not exist
+    logfs->block_device = open(pathname, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    if (logfs->block_device < 0)
+    {
+        free(logfs);
+        return NULL;
+    }
 
-This function performs a random read of len bytes at the location specified by off from the logfs.
-It checks if the read operation is within the bounds of the log and then calls device_read to perform the actual read.
-Returns 0 on success or an error code on failure.
-*/
+    pthread_mutex_init(&logfs->read_mutex, NULL);
+    pthread_mutex_init(&logfs->write_mutex, NULL);
+    pthread_cond_init(&logfs->write_cond, NULL);
 
-int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len) {
-    if (!logfs || !buf) {
+    initialize_read_cache(logfs);
+    logfs->append_queue = NULL;
+    logfs->append_queue_tail = NULL;
+    logfs->highest_written_offset = 0;
+    logfs->stop_worker = 0;
+
+    if (pthread_create(&logfs->worker_thread, NULL, worker_function, logfs) != 0)
+    {
+        close(logfs->block_device);
+        free(logfs);
+        return NULL;
+    }
+
+    return logfs;
+}
+
+void logfs_close(struct logfs *logfs)
+{
+    int i;
+
+    if (logfs != NULL)
+    {
+        pthread_mutex_lock(&logfs->write_mutex);
+        logfs->stop_worker = 1;
+        pthread_cond_signal(&logfs->write_cond);
+        pthread_mutex_unlock(&logfs->write_mutex);
+
+        pthread_join(logfs->worker_thread, NULL);
+
+        close(logfs->block_device);
+        pthread_mutex_destroy(&logfs->read_mutex);
+        pthread_mutex_destroy(&logfs->write_mutex);
+        pthread_cond_destroy(&logfs->write_cond);
+
+        for (i = 0; i < RCACHE_BLOCKS; ++i)
+        {
+            free(logfs->read_cache[i].data);
+        }
+
+        free(logfs);
+    }
+}
+
+int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len)
+{
+    int i;
+    ssize_t read_bytes;
+
+    if (logfs == NULL || buf == NULL || len == 0)
+    {
+        return 0;
+    }
+
+    pthread_mutex_lock(&logfs->read_mutex);
+    pthread_mutex_lock(&logfs->write_mutex);
+
+    while (off + len > logfs->highest_written_offset && len > 0)
+    {
+        pthread_cond_wait(&logfs->write_cond, &logfs->write_mutex);
+    }
+    pthread_mutex_unlock(&logfs->write_mutex);
+
+    for (i = 0; i < RCACHE_BLOCKS; ++i)
+    {
+        CacheBlock *cache = &logfs->read_cache[i];
+        if (cache->offset <= off && off + len <= cache->offset + cache->length && cache->data)
+        {
+            size_t cache_offset = off - cache->offset;
+            memcpy(buf, cache->data + cache_offset, len);
+            pthread_mutex_unlock(&logfs->read_mutex);
+            return 0;
+        }
+    }
+
+    read_bytes = pread(logfs->block_device, buf, len, off);
+    if (read_bytes < 0 || (size_t)read_bytes != len)
+    {
+        pthread_mutex_unlock(&logfs->read_mutex);
         return -1;
     }
 
-    pthread_mutex_lock(&logfs->mutex);
-    if (off + len > logfs->next_offset) {
-        TRACE("attempt to read beyond end of log");
-        pthread_mutex_unlock(&logfs->mutex);
-        return -1;
-    }
-    pthread_mutex_unlock(&logfs->mutex);
+    for (i = 0; i < RCACHE_BLOCKS; ++i)
+    {
+        if (logfs->read_cache[i].offset == UINT64_MAX || logfs->read_cache[i].length == 0)
+        {
+            logfs->read_cache[i].offset = off;
+            logfs->read_cache[i].length = len;
+            if (logfs->read_cache[i].data != NULL)
+            {
+                free(logfs->read_cache[i].data);
+            }
+            logfs->read_cache[i].data = malloc(len);
+            if (logfs->read_cache[i].data == NULL)
+            {
+                pthread_mutex_unlock(&logfs->read_mutex);
+                return -1;
+            }
+            memcpy(logfs->read_cache[i].data, buf, len);
 
-    return device_read(logfs->dev, buf, off, len);
+            break;
+        }
+    }
+
+    pthread_mutex_unlock(&logfs->read_mutex);
+    return 0;
 }
 
-/**
- * Append len bytes to the logfs.
- *
- * logfs: an opaque handle previously obtained by calling logfs_open()
- * buf  : a region of memory holding the len bytes to be written
- * len  : the number of bytes to write
- *
- * return: 0 on success, otherwise error
- */
+int logfs_append(struct logfs *logfs, const void *buf, uint64_t len)
+{
 
-/*
-NO offset as we are linearly appending blocks to disk
+    AppendData *new_data;
 
-This function appends len bytes to the logfs.
-It updates the next_offset and then calls device_write to perform the actual write.
-The function uses a mutex to ensure that the next_offset is updated atomically and a condition variable to signal any waiting threads that the log has been modified.
-Returns 0 on success or an error code on failure.
-*/
+    if (logfs == NULL)
+    {
 
-int logfs_append(struct logfs *logfs, const void *buf, uint64_t len) {
-    uint64_t offset;
-    int result;
-    
-    if (!logfs || !buf) {
+        return -1;
+    }
+    if (buf == NULL && len > 0)
+    {
+
+        return 0;
+    }
+    if (len == 0)
+    {
+
+        return 0;
+    }
+
+    new_data = malloc(sizeof(AppendData));
+    if (new_data == NULL)
+    {
+
         return -1;
     }
 
-    pthread_mutex_lock(&logfs->mutex);
+    new_data->data = malloc(len);
+    if (new_data->data == NULL)
+    {
 
-    offset = logfs->next_offset;
-    logfs->next_offset += len;
+        free(new_data);
+        return -1;
+    }
 
-    pthread_mutex_unlock(&logfs->mutex);
+    memcpy(new_data->data, buf, len);
+    new_data->len = len;
+    new_data->next = NULL;
 
-    result = device_write(logfs->dev, buf, offset, len);
+    pthread_mutex_lock(&logfs->write_mutex);
 
-    pthread_cond_signal(&logfs->cond);
+    if (logfs->append_queue_tail == NULL)
+    {
+        logfs->append_queue = new_data;
+    }
+    else
+    {
+        logfs->append_queue_tail->next = new_data;
+    }
+    logfs->append_queue_tail = new_data;
 
-    return result;
+    pthread_cond_signal(&logfs->write_cond);
+    pthread_mutex_unlock(&logfs->write_mutex);
+
+    return 0;
 }

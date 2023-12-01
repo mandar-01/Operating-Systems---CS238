@@ -128,6 +128,10 @@ read_write(const uint64_t N, const uint64_t K, const uint64_t V)
 			return -1;
 		}
 	}
+	kvdb_close(kvdb);
+	FREE(key);
+	FREE(val);
+	FREE(val_);
 	return 0;
 }
 
@@ -181,6 +185,7 @@ basic_logic(void)
 		TRACE(0);
 		return -1;
 	}
+
 	if ((0 != kvdb_size(kvdb)) || (0 != kvdb_waste(kvdb))) {
 		kvdb_close(kvdb);
 		TRACE("software");
