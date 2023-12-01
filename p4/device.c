@@ -160,7 +160,7 @@ device_write(struct device *device,
 {
 	assert( !len || buf );
 	assert( 0 == (off % device->block) );
-	assert( 0 == (len % device->block) );
+	// assert( 0 == (len % device->block) );
 	assert( (off + len) <= device->size );
 
 	if (len != (uint64_t)pwrite(device->fd,

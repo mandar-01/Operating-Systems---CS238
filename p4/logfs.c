@@ -1,47 +1,19 @@
-/**
- * Tony Givargis
- * Copyright (C), 2023
- * University of California, Irvine
- *
- * CS 238P - Operating Systems
- * logfs.c
- */
-
-#include <pthread.h>
-#include <inttypes.h>
-#include "device.h"
+#define _POSIX_C_SOURCE 200809L
 #include "logfs.h"
+#include <pthread.h>
 #include <unistd.h>
-#include "system.h"
-#include <sys/types.h>
-#include <sys/stat.h>
 #include <fcntl.h>
-#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 
-/**
- * Needs:
- *   pthread_create()
- *   pthread_join()
- *   pthread_mutex_init()
- *   pthread_mutex_destroy()
- *   pthread_mutex_lock()
- *   pthread_mutex_unlock()
- *   pthread_cond_init()
- *   pthread_cond_destroy()
- *   pthread_cond_wait()
- *   pthread_cond_signal()
- */
+#define RCACHE_BLOCKS 256
 
-/* research the above Needed API and design accordingly */
-
-// #define WCACHE_BLOCKS 32
-#define NUM_BLOCKS 256
-
-struct device
+struct Node
 {
-    int fd;
-    uint64_t size;  /* immutable */
-    uint64_t block; /* immutable */
+    char *data;
+    uint64_t len;
+    struct Node *link;
 };
 
 typedef struct
@@ -51,33 +23,25 @@ typedef struct
     char *data;
 } CacheBlock;
 
-typedef struct AppendData
-{
-    char *data;
-    uint64_t len;
-    struct AppendData *next;
-} AppendData;
-
 struct logfs
 {
     int device;
-    struct device *block_device;
-    CacheBlock read_cache[NUM_BLOCKS];
+    CacheBlock read_cache[RCACHE_BLOCKS];
     pthread_mutex_t read_mutex;
     pthread_mutex_t write_mutex;
-    pthread_cond_t write_cond;
-    AppendData *append_queue;
-    AppendData *append_queue_tail;
-    pthread_t worker_thread;
-    uint64_t highest_written_offset;
-    bool stop_worker;
+    pthread_cond_t condition;
+    struct Node *head;
+    struct Node *tail;
+    pthread_t worker;
+    uint64_t utilized;
+    int stop;
 };
 
-static void initialize_read_cache(struct logfs *log)
+static void start_cache(struct logfs *log)
 {
     int i;
 
-    for (i = 0; i < NUM_BLOCKS; ++i)
+    for (i = 0; i < RCACHE_BLOCKS; ++i)
     {
         log->read_cache[i].offset = UINT64_MAX;
         log->read_cache[i].length = 0;
@@ -85,66 +49,49 @@ static void initialize_read_cache(struct logfs *log)
     }
 }
 
-void initiliaze_logfs_attributes(struct logfs *logfs)
-{
-    logfs->append_queue = NULL;
-    logfs->append_queue_tail = NULL;
-    logfs->highest_written_offset = 0;
-    logfs->stop_worker = false;
-}
-
 static void *worker_function(void *arg)
 {
     struct logfs *logfs = (struct logfs *)arg;
-    AppendData *data;
+    struct Node *data;
     ssize_t bytes_written;
-    // int write_status;
 
-    while (true)
+    while (1)
     {
         pthread_mutex_lock(&logfs->write_mutex);
 
-        while (logfs->append_queue == NULL && !logfs->stop_worker)
+        while (logfs->head == NULL && !logfs->stop)
         {
-            pthread_cond_wait(&logfs->write_cond, &logfs->write_mutex);
+            pthread_cond_wait(&logfs->condition, &logfs->write_mutex);
         }
 
-        if (logfs->stop_worker && logfs->append_queue == NULL)
+        if (logfs->stop && logfs->head == NULL)
         {
             pthread_mutex_unlock(&logfs->write_mutex);
             break;
         }
 
-        data = logfs->append_queue;
-        logfs->append_queue = data->next;
-        if (logfs->append_queue == NULL)
+        data = logfs->head;
+        logfs->head = data->link;
+        if (logfs->head == NULL)
         {
-            logfs->append_queue_tail = NULL;
+            logfs->tail = NULL;
         }
 
-        bytes_written = pwrite(logfs->device, data->data, data->len, logfs->highest_written_offset);
-        // bytes_written = pwrite(logfs->block_device->fd, data->data, data->len, logfs->highest_written_offset);
-
+        bytes_written = pwrite(logfs->device, data->data, data->len, logfs->utilized);
         if (bytes_written > 0)
         {
-            logfs->highest_written_offset += bytes_written;
+            logfs->utilized += bytes_written;
         }
         else
         {
             TRACE(0);
         }
 
-        // if(0 == device_write(logfs->device, data->data, logfs->highest_written_offset, data->len)) {
-        //     logfs->highest_written_offset += data->len;
-        // } else {
-        //     TRACE(0);
-        // }
-
         pthread_mutex_unlock(&logfs->write_mutex);
         free(data->data);
         free(data);
 
-        pthread_cond_broadcast(&logfs->write_cond);
+        pthread_cond_broadcast(&logfs->condition);
     }
 
     return NULL;
@@ -153,41 +100,31 @@ static void *worker_function(void *arg)
 struct logfs *logfs_open(const char *pathname)
 {
     struct logfs *logfs = malloc(sizeof(struct logfs));
-    // if (logfs == NULL)
-    // {
-    //     return NULL;
-    // }
+    if (logfs == NULL)
+    {
+        return NULL;
+    }
 
-    // logfs->block_device = open(pathname, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-    // if (logfs->block_device < 0)
-    // {
-    //     free(logfs);
-    //     return NULL;
-    // }
-
-    logfs->block_device = device_open(pathname);
-
-    if (!logfs->block_device)
+    logfs->device = open(pathname, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    if (logfs->device < 0)
     {
         free(logfs);
-        TRACE(0);
         return NULL;
     }
 
     pthread_mutex_init(&logfs->read_mutex, NULL);
     pthread_mutex_init(&logfs->write_mutex, NULL);
-    pthread_cond_init(&logfs->write_cond, NULL);
+    pthread_cond_init(&logfs->condition, NULL);
 
-    initialize_read_cache(logfs);
-    // logfs->append_queue = NULL;
-    // logfs->append_queue_tail = NULL;
-    // logfs->highest_written_offset = 0;
-    // logfs->stop_worker = false;
-    initiliaze_logfs_attributes(logfs);
+    start_cache(logfs);
+    logfs->head = NULL;
+    logfs->tail = NULL;
+    logfs->utilized = 0;
+    logfs->stop = 0;
 
-    if (pthread_create(&logfs->worker_thread, NULL, worker_function, logfs) != 0)
+    if (pthread_create(&logfs->worker, NULL, worker_function, logfs) != 0)
     {
-        device_close(logfs->block_device);
+        close(logfs->device);
         free(logfs);
         return NULL;
     }
@@ -202,18 +139,18 @@ void logfs_close(struct logfs *logfs)
     if (logfs != NULL)
     {
         pthread_mutex_lock(&logfs->write_mutex);
-        logfs->stop_worker = true;
-        pthread_cond_signal(&logfs->write_cond);
+        logfs->stop = 1;
+        pthread_cond_signal(&logfs->condition);
         pthread_mutex_unlock(&logfs->write_mutex);
 
-        pthread_join(logfs->worker_thread, NULL);
+        pthread_join(logfs->worker, NULL);
 
-        device_close(logfs->block_device);
+        close(logfs->device);
         pthread_mutex_destroy(&logfs->read_mutex);
         pthread_mutex_destroy(&logfs->write_mutex);
-        pthread_cond_destroy(&logfs->write_cond);
+        pthread_cond_destroy(&logfs->condition);
 
-        for (i = 0; i < NUM_BLOCKS; ++i)
+        for (i = 0; i < RCACHE_BLOCKS; ++i)
         {
             free(logfs->read_cache[i].data);
         }
@@ -227,12 +164,7 @@ int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len)
     int i;
     ssize_t read_bytes;
 
-    // if (logfs == NULL || buf == NULL || len == 0)
-    // {
-    //     return 0;
-    // }
-
-    if (!logfs || !buf || !len)
+    if (logfs == NULL || buf == NULL || len == 0)
     {
         return 0;
     }
@@ -240,13 +172,13 @@ int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len)
     pthread_mutex_lock(&logfs->read_mutex);
     pthread_mutex_lock(&logfs->write_mutex);
 
-    while (off + len > logfs->highest_written_offset && len > 0)
+    while (off + len > logfs->utilized && len > 0)
     {
-        pthread_cond_wait(&logfs->write_cond, &logfs->write_mutex);
+        pthread_cond_wait(&logfs->condition, &logfs->write_mutex);
     }
     pthread_mutex_unlock(&logfs->write_mutex);
 
-    for (i = 0; i < NUM_BLOCKS; ++i)
+    for (i = 0; i < RCACHE_BLOCKS; ++i)
     {
         CacheBlock *cache = &logfs->read_cache[i];
         if (cache->offset <= off && off + len <= cache->offset + cache->length && cache->data)
@@ -258,20 +190,14 @@ int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len)
         }
     }
 
-    if (0 >= device_read(logfs->block_device, buf, off, len))
+    read_bytes = pread(logfs->device, buf, len, off);
+    if (read_bytes < 0 || (size_t)read_bytes != len)
     {
         pthread_mutex_unlock(&logfs->read_mutex);
         return -1;
     }
 
-    // read_bytes = pread(logfs->block_device->fd, buf, len, off);
-    // if (read_bytes < 0 || (size_t)read_bytes != len)
-    // {
-    //     pthread_mutex_unlock(&logfs->read_mutex);
-    //     return -1;
-    // }
-
-    for (i = 0; i < NUM_BLOCKS; ++i)
+    for (i = 0; i < RCACHE_BLOCKS; ++i)
     {
         if (logfs->read_cache[i].offset == UINT64_MAX || logfs->read_cache[i].length == 0)
         {
@@ -282,66 +208,74 @@ int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len)
                 free(logfs->read_cache[i].data);
             }
             logfs->read_cache[i].data = malloc(len);
-            // if (logfs->read_cache[i].data == NULL)
-            // {
-            //     pthread_mutex_unlock(&logfs->read_mutex);
-            //     return -1;
-            // }
+            if (logfs->read_cache[i].data == NULL)
+            {
+                pthread_mutex_unlock(&logfs->read_mutex);
+                return -1;
+            }
             memcpy(logfs->read_cache[i].data, buf, len);
-            pthread_mutex_unlock(&logfs->read_mutex);
-            return 0;
 
             break;
         }
     }
 
-    // pthread_mutex_unlock(&logfs->read_mutex);
+    pthread_mutex_unlock(&logfs->read_mutex);
     return 0;
 }
 
 int logfs_append(struct logfs *logfs, const void *buf, uint64_t len)
 {
 
-    AppendData *append_data;
+    struct Node *new_data;
 
     if (logfs == NULL)
     {
 
         return -1;
     }
-    if ((buf == NULL && len > 0) || (len == 0))
+    if (buf == NULL && len > 0)
+    {
+
+        return 0;
+    }
+    if (len == 0)
     {
 
         return 0;
     }
 
-    append_data = malloc(sizeof(AppendData));
+    new_data = malloc(sizeof(struct Node));
+    if (new_data == NULL)
+    {
 
-    append_data->data = malloc(len);
-    append_data->len = len;
-    append_data->next = NULL;
-    // if (append_data->data == NULL)
-    // {
+        return -1;
+    }
 
-    //     free(append_data);
-    //     return -1;
-    // }
+    new_data->data = malloc(len);
+    if (new_data->data == NULL)
+    {
 
-    memcpy(append_data->data, buf, len);
+        free(new_data);
+        return -1;
+    }
+
+    memcpy(new_data->data, buf, len);
+    new_data->len = len;
+    new_data->link = NULL;
 
     pthread_mutex_lock(&logfs->write_mutex);
 
-    if (logfs->append_queue_tail == NULL)
+    if (logfs->tail == NULL)
     {
-        logfs->append_queue = append_data;
+        logfs->head = new_data;
     }
     else
     {
-        logfs->append_queue_tail->next = append_data;
+        logfs->tail->link = new_data;
     }
-    logfs->append_queue_tail = append_data;
+    logfs->tail = new_data;
 
-    pthread_cond_signal(&logfs->write_cond);
+    pthread_cond_signal(&logfs->condition);
     pthread_mutex_unlock(&logfs->write_mutex);
 
     return 0;
