@@ -36,6 +36,12 @@
 
 /* research the above Needed API and design accordingly */
 
+struct device {
+	int fd;
+	uint64_t size;  /* immutable */
+	uint64_t block; /* immutable */
+};
+
 typedef struct
 {
     uint64_t offset;
@@ -52,7 +58,8 @@ typedef struct AppendData
 
 struct logfs
 {
-    int block_device;
+    int device;
+    struct device *block_device;
     CacheBlock read_cache[RCACHE_BLOCKS];
     pthread_mutex_t read_mutex;
     pthread_mutex_t write_mutex;
@@ -105,11 +112,8 @@ static void *worker_function(void *arg)
             logfs->append_queue_tail = NULL;
         }
 
-        bytes_written = pwrite(logfs->block_device, data->data, data->len, logfs->highest_written_offset);
-
-        // if(!device_write(logfs->block_device, data->data, logfs->highest_written_offset, data->len))
-
-        // if(write)
+        bytes_written = pwrite(logfs->device, data->data, data->len, logfs->highest_written_offset);
+        // bytes_written = pwrite(logfs->block_device->fd, data->data, data->len, logfs->highest_written_offset);
 
         if (bytes_written > 0)
         {
@@ -119,6 +123,12 @@ static void *worker_function(void *arg)
         {
             TRACE(0);
         }
+
+        // if(0 == device_write(logfs->device, data->data, logfs->highest_written_offset, data->len)) {
+        //     logfs->highest_written_offset += data->len;
+        // } else {
+        //     TRACE(0);
+        // }
 
         pthread_mutex_unlock(&logfs->write_mutex);
         free(data->data);
@@ -138,10 +148,18 @@ struct logfs *logfs_open(const char *pathname)
         return NULL;
     }
 
-    logfs->block_device = open(pathname, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-    if (logfs->block_device < 0)
-    {
+    // logfs->block_device = open(pathname, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    // if (logfs->block_device < 0)
+    // {
+    //     free(logfs);
+    //     return NULL;
+    // }
+
+    logfs->block_device = device_open(pathname);
+
+    if(!logfs->block_device) {
         free(logfs);
+        TRACE(0);
         return NULL;
     }
 
@@ -157,7 +175,7 @@ struct logfs *logfs_open(const char *pathname)
 
     if (pthread_create(&logfs->worker_thread, NULL, worker_function, logfs) != 0)
     {
-        close(logfs->block_device);
+        device_close(logfs->block_device);
         free(logfs);
         return NULL;
     }
@@ -178,7 +196,7 @@ void logfs_close(struct logfs *logfs)
 
         pthread_join(logfs->worker_thread, NULL);
 
-        close(logfs->block_device);
+        device_close(logfs->block_device);
         pthread_mutex_destroy(&logfs->read_mutex);
         pthread_mutex_destroy(&logfs->write_mutex);
         pthread_cond_destroy(&logfs->write_cond);
@@ -223,12 +241,17 @@ int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len)
         }
     }
 
-    read_bytes = pread(logfs->block_device, buf, len, off);
-    if (read_bytes < 0 || (size_t)read_bytes != len)
-    {
+    if(0 >= device_read(logfs->block_device, buf, off, len)) {
         pthread_mutex_unlock(&logfs->read_mutex);
         return -1;
     }
+
+    // read_bytes = pread(logfs->block_device->fd, buf, len, off);
+    // if (read_bytes < 0 || (size_t)read_bytes != len)
+    // {
+    //     pthread_mutex_unlock(&logfs->read_mutex);
+    //     return -1;
+    // }
 
     for (i = 0; i < RCACHE_BLOCKS; ++i)
     {
