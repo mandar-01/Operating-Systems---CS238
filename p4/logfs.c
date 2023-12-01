@@ -6,8 +6,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include "device.h"
 
 #define NUM_BLOCKS 256
+
+struct device
+{
+    int fd;
+    uint64_t size;  /* immutable */
+    uint64_t block; /* immutable */
+};
 
 struct Node
 {
@@ -25,7 +33,8 @@ typedef struct
 
 struct logfs
 {
-    int device;
+    // int device;
+    struct device *block_device;
     CacheBlock *read_cache;
     pthread_mutex_t read_mutex;
     pthread_mutex_t write_mutex;
@@ -83,7 +92,7 @@ static void *thread_function(void *arg)
             logfs->tail = NULL;
         }
 
-        bytes_written = pwrite(logfs->device, data->data, data->len, logfs->utilized);
+        bytes_written = pwrite(logfs->block_device->fd, data->data, data->len, logfs->utilized);
         if (bytes_written > 0)
         {
             logfs->utilized += bytes_written;
@@ -111,8 +120,9 @@ struct logfs *logfs_open(const char *pathname)
         return NULL;
     }
 
-    logfs->device = open(pathname, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
-    if (logfs->device < 0)
+    // logfs->device = open(pathname, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    logfs->block_device = device_open(pathname);
+    if (!logfs->block_device)
     {
         free(logfs);
         return NULL;
@@ -126,7 +136,7 @@ struct logfs *logfs_open(const char *pathname)
 
     if (pthread_create(&logfs->worker, NULL, thread_function, logfs) != 0)
     {
-        close(logfs->device);
+        device_close(logfs->block_device);
         free(logfs);
         return NULL;
     }
@@ -147,7 +157,7 @@ void logfs_close(struct logfs *logfs)
 
         pthread_join(logfs->worker, NULL);
 
-        close(logfs->device);
+        device_close(logfs->block_device);
         pthread_mutex_destroy(&logfs->read_mutex);
         pthread_mutex_destroy(&logfs->write_mutex);
         pthread_cond_destroy(&logfs->condition);
@@ -194,7 +204,7 @@ int logfs_read(struct logfs *logfs, void *buf, uint64_t off, size_t len)
         i++;
     }
 
-    read_bytes = pread(logfs->device, buf, len, off);
+    read_bytes = pread(logfs->block_device->fd, buf, len, off);
     if (read_bytes < 0 || (size_t)read_bytes != len)
     {
         pthread_mutex_unlock(&logfs->read_mutex);

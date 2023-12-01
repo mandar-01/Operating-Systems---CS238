@@ -353,7 +353,7 @@ int main(int argc, char *argv[])
 	/* postlude */
 
 	term_bold();
-	term_color(TERM_COLOR_YELLOW);
+	term_color(TERM_COLOR_MAGENTA);
 	printf("---------- TEST END ----------\n");
 	term_reset();
 	return 0;
