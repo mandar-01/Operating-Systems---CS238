@@ -75,6 +75,88 @@ cpu_util(const char *s)
 	return util;
 }
 
+void network_stats(const char *interface_name)
+{
+    FILE *file = fopen("/proc/net/dev", "r");
+    char line[1024];
+
+    while (fgets(line, sizeof(line), file) != NULL)
+    {
+        if (strstr(line, interface_name) != NULL)
+        {
+            unsigned long long packets_received, packets_transmitted, bytes_received, bytes_transmitted;
+            sscanf(line + strcspn(line, ":") + 1, "%llu %llu %*u %*u %*u %*u %*u %*u %llu %llu",
+                   &bytes_received, &packets_received, &bytes_transmitted, &packets_transmitted);
+            printf("Transmitted packets: %llu | Received packets: %llu | Transmitted bytes: %llu | Received bytes: %llu\n", packets_transmitted, packets_received, bytes_transmitted, bytes_received);
+            fflush(stdout);
+            fclose(file);
+            return;
+        }
+    }
+    fclose(file);
+}
+
+void io_stats(const char *device_name) {
+    char line[1024];
+    FILE *file;
+    file = fopen("/proc/diskstats", "r");
+    while (fgets(line, sizeof(line), file) != NULL) {
+        unsigned int major, minor;
+        char dev_name[20];
+        unsigned long long reads_completed, reads_merged, sectors_read, read_time,
+            writes_completed, writes_merged, sectors_written, write_time;
+        if (sscanf(line, "%u %u %s %llu %llu %llu %llu %llu %llu %llu %llu",
+                   &major, &minor, dev_name,
+                   &reads_completed, &reads_merged, &sectors_read, &read_time,
+                   &writes_completed, &writes_merged, &sectors_written, &write_time) == 11) {
+
+            if (strcmp(dev_name, device_name) == 0) {
+                printf("Reads: %llu | Writes: %llu\n", reads_completed, writes_completed);
+                fflush(stdout);
+                return;
+            }
+        }
+    }
+    fclose(file);
+}
+
+double memory_util()
+{	
+	const char * const MEMINFO = "/proc/meminfo";
+    FILE *meminfo_file = fopen(MEMINFO, "r");
+
+    char line[1024];
+    unsigned long mem_total = 0, mem_free = 0, buffers = 0, cached = 0;
+
+    while (fgets(line, sizeof(line), meminfo_file))
+    {
+        unsigned long value;
+        if (sscanf(line, "MemTotal: %lu kB", &value) == 1)
+        {
+            mem_total = value;
+        }
+        else if (sscanf(line, "MemFree: %lu kB", &value) == 1)
+        {
+            mem_free = value;
+        }
+        else if (sscanf(line, "Buffers: %lu kB", &value) == 1)
+        {
+            buffers = value;
+        }
+        else if (sscanf(line, "Cached: %lu kB", &value) == 1)
+        {
+            cached = value;
+        }
+    }
+
+    fclose(meminfo_file);
+
+    unsigned long memory_used = mem_total - mem_free - buffers - cached;
+    double memory_used_percentage = ((double)memory_used / mem_total) * 100.0;
+
+    return memory_used_percentage;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -95,9 +177,15 @@ main(int argc, char *argv[])
 			return -1;
 		}
 		if (fgets(line, sizeof (line), file)) {
-			printf("\r%5.1f%%", cpu_util(line));
+			printf("CPU Utilization: %5.1f%%\n", cpu_util(line));
 			fflush(stdout);
 		}
+		printf("Memory Utilization: %5.1f%%\n", memory_util());
+		network_stats("wlp0s20f3");
+		io_stats("nvme0n1");
+		printf("==========================================================\n");
+		fflush(stdout);
+		
 		us_sleep(500000);
 		fclose(file);
 	}
